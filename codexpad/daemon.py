@@ -737,11 +737,13 @@ def handle_request(handle, req):
     """
     if "cmd" in req:
         cmd = req["cmd"]
-        if cmd in ("preview", "rainbow", "off", "trim", "ring") and _paused[0]:
+        if cmd in ("preview", "rainbow", "off", "trim", "ring",
+                   "zone") and _paused[0]:
             return {"error": "pad is handed to Codex right now — quit the "
                              "ChatGPT app (auto-handoff) or click Take pad "
                              "back first"}
-        if cmd in ("preview", "rainbow", "off", "trim", "ring", "resume"):
+        if cmd in ("preview", "rainbow", "off", "trim", "ring", "zone",
+                   "resume"):
             pad_err = _pad_error(handle)
             if pad_err and not (cmd == "resume" and _paused[0]):
                 return pad_err
@@ -830,10 +832,29 @@ def handle_request(handle, req):
             slot = int(req.get("slot", 0))
             _rpc(handle, "v.oai.thstatus",
                  [{"id": slot, "c": config.color_int(req.get("color", "FF00FF"))}])
-            _rpc(handle, "v.oai.thstatus",
-                 [{"id": slot, "e": int(req.get("effect", 1)),
-                   "b": round(float(req.get("brightness", 1.0)) * _trim[0], 2)}])
+            frame = {"id": slot, "e": int(req.get("effect", 1)),
+                     "b": round(float(req.get("brightness", 1.0)) * _trim[0], 2)}
+            # undocumented per-key fields, passed through verbatim so
+            # tools/probe.py sweeps can test what they do on real hardware
+            for extra in ("s", "m", "sk", "sa"):
+                if extra in req:
+                    frame[extra] = req[extra]
+            _rpc(handle, "v.oai.thstatus", [frame])
             print(f"  preview slot={slot}", flush=True)
+        elif cmd == "zone":
+            # raw rgbcfg passthrough for zone probing ('ambient' is verified,
+            # 'keys' is the unexplored one). Colour first, rest after, same
+            # split as the mic ring uses.
+            zone = str(req.get("zone", "ambient"))
+            fields = {k: v for k, v in (req.get("fields") or {}).items()
+                      if k in ("c", "e", "b", "s", "m")}
+            if isinstance(fields.get("c"), str):
+                fields["c"] = config.color_int(fields["c"])
+            if "c" in fields:
+                _rpc(handle, "v.oai.rgbcfg", {zone: {"c": fields.pop("c")}})
+            if fields:
+                _rpc(handle, "v.oai.rgbcfg", {zone: fields})
+            print(f"  zone    {zone} <- {req.get('fields')}", flush=True)
         elif cmd == "rainbow":
             for i in range(NSLOTS):
                 set_slot(handle, i, "rainbow")
