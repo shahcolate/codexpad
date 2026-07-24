@@ -294,10 +294,11 @@ Configures the two lighting zones: `ambient` (outer ring) and `keys` (under-keyc
 backlight). Each zone takes `e` (effect), `b` (brightness), `s` (speed), `c` (colour) and
 `m` (an additional effect parameter of undetermined meaning).
 
-Given the 61-byte body limit, a two-zone update cannot fit in a single frame. codexpad's
-mic indicator now sends single-zone partial updates to `ambient` (an `{"c": …}` frame
-followed by `{"e": …, "b": …}`, mirroring the §5.1 split) — whether the device accepts
-partial zone objects, and the zone effect encoding, remain unconfirmed on hardware.
+Given the 61-byte body limit, a two-zone update cannot fit in a single frame.
+**Single-zone partial updates to `ambient` are confirmed on hardware**: codexpad's mic
+indicator sends an `{"c": …}` frame followed by `{"e": 1, "b": 1}` (mirroring the §5.1
+split) and the ring lights in the given colour; `{"e": 0, "b": 0}` clears it. The `keys`
+zone, the `s` and `m` fields, and effects beyond solid have not been exercised.
 
 ### 5.4 Other methods
 
@@ -339,7 +340,8 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | Effects `0`, `2`–`6` | Documented, not individually tested |
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
 | `AG02`–`AG05` identifiers | Inferred from pattern |
-| `v.oai.rgbcfg` | Sent live (mic ring indicator); acceptance and effect unconfirmed |
+| `v.oai.rgbcfg` `ambient` zone: partial updates, `c`/`e`/`b` | Verified — mic ring lights and clears |
+| `v.oai.rgbcfg` `keys` zone, `s`/`m`, non-solid effects | Not tested |
 | `fs.*`, `sys.*`, `host.*`, `mp.*` behaviour | Names only |
 | Outbound chunking mechanism | Unknown |
 

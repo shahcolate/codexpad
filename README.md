@@ -219,12 +219,9 @@ own, so bind them to your dictation tool:
 }
 ```
 
-While the mic is open the daemon lights the ambient ring red. The ring is
-driven by `v.oai.rgbcfg`, which PROTOCOL.md §5.3 still lists as
-uncharacterised — this is its first live use. If your ring stays dark, the
-mic events still fire; run
-`python tools/probe.py call v.oai.rgbcfg '{"ambient":{"e":1,"b":1}}'` and
-open an issue with the reply so the method can be documented properly.
+While the mic is open the daemon lights the ambient ring red (colour
+configurable in the app) — confirmed on hardware, and the first
+characterisation of `v.oai.rgbcfg` (PROTOCOL.md §5.3).
 
 ---
 
@@ -305,7 +302,7 @@ substitution — if Work Louder or OpenAI ship an official SDK, use that instead
 - [x] Capture the Command Key `k` identifiers — `ACT06`–`ACT12`, physically mapped (PROTOCOL.md §4.1)
 - [x] Confirm the stick's angle orientation — `a=0` down, counter-clockwise (PROTOCOL.md §4.2)
 - [ ] Session navigation on the joystick — flicks fire, but nothing consumes them yet
-- [ ] Characterise `v.oai.rgbcfg` — first live use is the mic ring indicator; needs a hardware report
+- [x] Characterise `v.oai.rgbcfg` `ambient` — confirmed via the mic ring (`keys` zone, `s`/`m`, non-solid effects still open)
 - [x] Confirm `ACT` key releases — hold-to-talk closes on release, so `act: 0` arrives (mic pair, directly)
 - [ ] Linux and Windows testing — currently macOS only
 - [ ] Reconcile with the vendor's own layer system so Codex and Claude coexist
