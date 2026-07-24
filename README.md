@@ -216,22 +216,36 @@ relaunch the terminal. If `python tools/probe.py enumerate` lists the
 device, it's this permission — not the cable, and not another app "holding"
 it. Stubborn cases: reboot, or `tccutil reset ListenEvent` and re-grant.
 
-**If macOS won't grant it to python no matter what** (observed in the wild:
-user process denied, root LaunchDaemon denied, while the ChatGPT *app*
-opens the same pad happily) — make the daemon an app, which TCC respects:
+**If the daemon still can't open the pad after granting Input Monitoring** —
+observed in the wild on an anaconda Mac — the requirement is stricter than
+it looks. Run `python tools/probe.py color 0 00FF00` (no sudo) and then with
+`sudo`: if only the sudo one lights a key, **this Mac needs root *and* Input
+Monitoring at the same time**. That combination is only satisfied by "sudo
+from a context that holds the grant":
+
+| launch | root | Input Monitoring | opens the pad |
+|---|---|---|---|
+| `sudo python -m codexpad.daemon` (granted terminal) | yes | yes (inherited) | ✅ |
+| plain `python -m codexpad` | no | yes | ❌ |
+| root LaunchDaemon (`service.sh`) | yes | no (launchd can't hold it) | ❌ |
+
+So for no-terminal auto-start on such a Mac, use the login agent, which
+sudo-runs the daemon inside your GUI session:
 
 ```bash
-./make_login_app.sh "$(which python)"
+./install-login.sh "$(which python)"
 ```
 
-builds `~/Applications/Codexpad.app` (ad-hoc signed, no Dock icon) that
-just runs the daemon. Grant **it** Input Monitoring, add it to Login
-Items, done: starts at login, no terminal, survives replugs. Alternatives
-that work on some setups: `sudo ./service.sh "$(which python)"` installs a
-root LaunchDaemon (`sudo ./service.sh remove` to undo), and plain
-`sudo python -m codexpad.daemon` always works from a granted terminal.
-After sudo runs, clean up with `sudo rm -f /tmp/codexpad.sock` (the daemon
-says so when this is the issue).
+It adds a passwordless-sudo rule for one fixed command (validated with
+`visudo` first) and a LaunchAgent that runs it at login — no terminal,
+survives reboots. `./install-login.sh remove` undoes all three pieces.
+Where root alone is enough, `sudo ./service.sh "$(which python)"` (a root
+LaunchDaemon) also works; and `sudo python -m codexpad.daemon` in a granted
+terminal always works as the immediate fallback. After any sudo run, clean
+up a root-owned socket with `sudo rm -f /tmp/codexpad.sock`.
+
+**Note the trade-off:** running the daemon as root means your `commands`
+bindings run as root too — keep them to things you'd sudo anyway.
 
 **Device doesn't enumerate — or enumerates but won't open.** Run
 `python tools/probe.py enumerate` and read the bus tag: the pad exposes the

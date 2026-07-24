@@ -4,10 +4,14 @@
 #   sudo ./service.sh "$(which python)"     install / update
 #   sudo ./service.sh remove                uninstall
 #
-# Use this when macOS refuses to grant Input Monitoring to your python —
-# root bypasses that check entirely. The daemon starts at boot, restarts if
-# it dies, waits for the pad when it's absent, and logs to
-# /tmp/codexpad.daemon.log. No terminal ever needs to stay open.
+# NOTE: on some Macs this is NOT enough. Opening the pad's vendor HID
+# interface can require root AND Input Monitoring together, and a LaunchDaemon
+# has root but cannot hold an Input Monitoring grant (launchd has no GUI
+# identity) -- the daemon then just logs "waiting for the Codex Micro" forever
+# with the pad wired. If that happens, use ./install-login.sh instead, which
+# sudo-runs the daemon from your login session so it gets both. This script
+# still helps where root alone suffices, and starts the daemon at boot,
+# restarts it if it dies, waits for the pad, and logs to /tmp.
 #
 # Prefer the user-level service (the app's "Run at login" button) when Input
 # Monitoring cooperates; remove this one first if you switch.
