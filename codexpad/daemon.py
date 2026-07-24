@@ -398,13 +398,19 @@ def open_device():
     except OSError:
         sys.exit(
             "Could not open the Codex Micro.\n"
-            "  - Is it in WIRED mode? Hold the front-left touch control 3s, "
-            "then tap to cycle past the three BLE channels until the underglow "
-            "turns white.\n"
-            "  - On macOS, grant Input Monitoring to your terminal "
-            "(System Settings > Privacy & Security > Input Monitoring), then "
-            "fully quit and relaunch it.\n"
-            "  - Quit the ChatGPT desktop app; it may hold the device."
+            "  Most likely cause on macOS: Input Monitoring. Grant it to your\n"
+            "  TERMINAL app (System Settings > Privacy & Security > Input\n"
+            "  Monitoring), then FULLY quit and relaunch the terminal - grants\n"
+            "  only apply to new processes. sudo works as a stopgap.\n"
+            "  To tell the causes apart, run: python tools/probe.py enumerate\n"
+            "  - device listed  -> it's the permission above, nothing is "
+            "'holding' it\n"
+            "  - device missing -> wired mode: hold the front-left touch "
+            "control 3s,\n"
+            "    tap past the three BLE channels until the underglow turns "
+            "white;\n"
+            "    charge-only USB-C cables also cause this. And quit the "
+            "ChatGPT app."
         )
     return handle
 
@@ -490,7 +496,14 @@ def handle_request(handle, req):
 
 def serve(handle):
     if os.path.exists(SOCK_PATH):
-        os.unlink(SOCK_PATH)
+        try:
+            os.unlink(SOCK_PATH)
+        except PermissionError:
+            sys.exit(
+                f"Stale socket {SOCK_PATH} is owned by another user - "
+                f"left over from a sudo run.\n"
+                f"Remove it first: sudo rm -f {SOCK_PATH}"
+            )
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(SOCK_PATH)
     os.chmod(SOCK_PATH, 0o777)   # hooks may run as a different uid than the daemon

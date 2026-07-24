@@ -63,21 +63,28 @@ Confirm with `python tools/probe.py enumerate`.
 ```bash
 git clone https://github.com/shahcolate/codex-micro-for-claude && cd codex-micro-for-claude
 pip install -r requirements.txt
-
-python tools/probe.py enumerate      # device should appear
-python -m codexpad.daemon --test     # key 0 cycles through all five states
-
-./install.sh                         # merges hooks into ~/.claude/settings.json
-python -m codexpad.daemon            # leave this running
-python -m codexpad.app               # optional: colours, setup checks, hook installer
+python -m codexpad.app               # starts the daemon too — open http://127.0.0.1:8378
 ```
 
-Then quit and reopen Claude Code and send a prompt.
+The app's **Claude Code setup** card walks you through the rest: it checks
+device, daemon and hooks, and the **⚙️ Install hooks** button does the settings
+merge for you. Then fully quit and reopen Claude Code and send a prompt.
+
+Prefer the terminal? The pieces run separately (`--no-daemon` stops the app
+auto-starting one):
+
+```bash
+python tools/probe.py enumerate      # device should appear
+python -m codexpad.daemon --test     # key 0 cycles through all five states
+./install.sh                         # merges hooks into ~/.claude/settings.json
+python -m codexpad.daemon            # leave this running
+```
 
 `install.sh` writes absolute paths into your settings and backs up the existing
 file first. If you prefer to do it by hand, copy
 [`hooks/settings.example.json`](hooks/settings.example.json) and replace
-`PYTHON` and `/PATH/TO/`.
+`PYTHON` and `/PATH/TO/`. After every `git pull`, restart the daemon (the app
+does this check for you and offers a **▶ Start daemon** button).
 
 ---
 
@@ -231,6 +238,10 @@ characterisation of `v.oai.rgbcfg` (PROTOCOL.md §5.3).
 gates opening it behind Input Monitoring. Add your terminal in System Settings →
 Privacy & Security → Input Monitoring, then **fully quit and relaunch** the
 terminal — grants only apply to new processes. `sudo` works as a stopgap.
+To rule out other causes: if `python tools/probe.py enumerate` lists the
+device, it's this permission — not the cable, and not another app "holding"
+the device. And after running under `sudo`, clean up before going sudo-free:
+`sudo rm -f /tmp/codexpad.sock` (the daemon tells you when this is the issue).
 
 **Device doesn't enumerate.** It's in BLE mode. See wired mode above. A
 charge-only USB-C cable produces identical symptoms.

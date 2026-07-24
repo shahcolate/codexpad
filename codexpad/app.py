@@ -3,21 +3,25 @@
 
     python -m codexpad.app          # then open http://127.0.0.1:8378
 
-A live mockup of the pad showing what each Agent Key is doing, colour pickers
-and effect menus for every state with preview on any key, theme presets, a
-master brightness slider, mic ring colour, command bindings, the rainbow
-button, and a Setup card that checks hidapi / device / daemon / hooks and can
-install the Claude Code hooks for you (it runs install.sh).
+Launches the daemon too, if one isn't already running (skip with
+--no-daemon). A live mockup of the pad showing what each Agent Key is doing,
+colour pickers and effect menus for every state with preview on any key,
+theme presets, a master brightness slider, mic ring colour, command bindings,
+the rainbow button, and a Setup card that checks hidapi / device / daemon /
+hooks, can install the Claude Code hooks (runs install.sh), and can start the
+daemon.
 
 Stdlib only. Binds to 127.0.0.1 only — command bindings are shell commands
 run by the daemon and the install button writes ~/.claude/settings.json, so
 this page must never be reachable off-machine.
 """
+import argparse
 import json
 import os
 import socket
 import subprocess
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config
@@ -44,6 +48,38 @@ def ask_daemon(payload):
         return json.loads(raw)
     except Exception:
         return {"error": "unparseable reply from daemon"}
+
+
+def daemon_running():
+    return "error" not in ask_daemon({"cmd": "ping"})
+
+
+_daemon_proc = [None]
+
+
+def start_daemon():
+    """Spawn python -m codexpad.daemon and wait briefly for its socket.
+
+    On failure the daemon's own output — which includes the wired-mode and
+    Input Monitoring instructions — is returned so the UI can show it.
+    """
+    if daemon_running():
+        return {"ok": 1, "note": "daemon already running"}
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    proc = subprocess.Popen([sys.executable, "-m", "codexpad.daemon"],
+                            cwd=repo, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    _daemon_proc[0] = proc
+    for _ in range(25):                 # up to ~2.5s
+        time.sleep(0.1)
+        if proc.poll() is not None:     # it exited: report why, verbatim
+            out, _ = proc.communicate()
+            return {"error": (out or "").strip() or
+                             f"daemon exited with code {proc.returncode}"}
+        if daemon_running():
+            return {"ok": 1, "note": "daemon started"}
+    return {"error": "daemon is starting but its socket isn't answering yet — "
+                     "hit Re-check in a moment"}
 
 
 def hook_status(path=None):
@@ -116,7 +152,9 @@ PAGE = """<!doctype html>
           box-shadow: 0 4px 24px rgba(0,0,0,.35); }
   .card h2 { font-size: 1.05rem; margin: 0 0 .8rem; color: #c9d1d9; }
   #banner { display: none; background: #3d1d1d; border: 1px solid #6e2c2c;
-            color: #ffb4b4; border-radius: 10px; padding: .6rem .9rem; margin: .8rem 0; }
+            color: #ffb4b4; border-radius: 10px; padding: .6rem .9rem; margin: .8rem 0;
+            white-space: pre-wrap; }
+  #banner button { margin-top: .5rem; display: block; }
   #toast { min-height: 1.3rem; color: #8b949e; margin: .6rem 0; }
   table { border-collapse: collapse; width: 100%; }
   td, th { padding: .4rem .5rem; text-align: left; border-bottom: 1px solid #21262d; }
@@ -234,6 +272,7 @@ PAGE = """<!doctype html>
   <h2>Claude Code setup</h2>
   <ul class="check" id="checks"></ul>
   <p>
+    <button class="big" onclick="startDaemon()">▶ Start daemon</button>
     <button class="big" onclick="install()">⚙️ Install hooks</button>
     <button class="big" onclick="refreshDoctor()">↻ Re-check</button>
   </p>
@@ -376,10 +415,29 @@ async function pollStatus() {
   if (!s.error) { paintPad(s); banner(null); }
   setTimeout(pollStatus, 2500);
 }
-function banner(msg) {
+function banner(msg, offerStart) {
   const b = $("#banner");
-  b.style.display = msg ? "block" : "none";
-  if (msg) b.textContent = msg;
+  if (!msg) { b.style.display = "none"; return; }
+  b.style.display = "block";
+  b.textContent = msg;
+  if (offerStart !== false) {
+    const btn = document.createElement("button");
+    btn.textContent = "▶ Start daemon";
+    btn.onclick = startDaemon;
+    b.appendChild(btn);
+  }
+}
+async function startDaemon() {
+  say("starting daemon…");
+  const r = await api("/api/daemon/start", {});
+  if (r.error) {
+    banner(r.error + "\\n\\n(or run it yourself: sudo python -m codexpad.daemon)");
+    say("daemon didn't start");
+  } else {
+    say(r.note || "daemon started");
+    banner(null);
+  }
+  refreshDoctor();
 }
 function checkItem(ok, label, hint) {
   const cls = ok === true ? "ok" : (ok === false ? "bad" : "meh");
@@ -393,11 +451,10 @@ async function refreshDoctor() {
     checkItem(d.hidapi, "hidapi installed", "pip install hidapi") +
     checkItem(d.device, "Codex Micro on USB",
               "wired mode: hold the touch control 3s, tap past BLE until white") +
-    checkItem(d.daemon, "daemon running", "python -m codexpad.daemon") +
+    checkItem(d.daemon, "daemon running", "use ▶ Start daemon below") +
     checkItem(hookCount === 6, `Claude Code hooks (${hookCount}/6) in ${d.hooks.path}`,
               "click Install hooks, then fully restart Claude Code");
-  banner(d.daemon ? null :
-    "Daemon not reachable — start it with: python -m codexpad.daemon (and restart it after every git pull)");
+  banner(d.daemon ? null : "Daemon not running.");
 }
 async function install() {
   say("running install.sh…");
@@ -490,11 +547,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send(ask_daemon({"cmd": "ping"}))
         elif self.path == "/api/install":
             self._send(run_install())
+        elif self.path == "/api/daemon/start":
+            self._send(start_daemon())
         else:
             self._send({"error": "not found"}, 404)
 
 
 def main():
+    ap = argparse.ArgumentParser(description="codexpad web app")
+    ap.add_argument("--no-daemon", action="store_true",
+                    help="don't auto-start the daemon")
+    args = ap.parse_args()
+
+    if not args.no_daemon:
+        result = start_daemon()
+        print("daemon: " + (result.get("note") or result.get("error", "started")),
+              flush=True)
+
     port = config.load().get("port", config.PORT)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"codexpad app on http://127.0.0.1:{port}  (config: {config.CONFIG_PATH})",
