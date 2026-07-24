@@ -57,17 +57,26 @@ def daemon_running():
 
 _daemon_proc = [None]
 
+WRAPPER_BIN = "/usr/local/bin/codexpad-daemon"
+
 
 def start_daemon():
-    """Spawn python -m codexpad.daemon and wait briefly for its socket.
+    """Start the daemon and wait briefly for its socket.
 
-    On failure the daemon's own output — which includes the wired-mode and
-    Input Monitoring instructions — is returned so the UI can show it.
+    Prefers the passwordless root wrapper installed by make_login_app.sh /
+    install-login.sh when it exists — on Macs that need root + Input
+    Monitoring together, that is the only spawn that works. Falls back to
+    plain python otherwise. On failure the daemon's own output — wired-mode
+    and Input Monitoring guidance — is returned so the UI can show it.
     """
     if daemon_running():
         return {"ok": 1, "note": "daemon already running"}
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    proc = subprocess.Popen([sys.executable, "-m", "codexpad.daemon"],
+    if os.path.exists(WRAPPER_BIN):
+        cmd = ["/usr/bin/sudo", "-n", WRAPPER_BIN]
+    else:
+        cmd = [sys.executable, "-m", "codexpad.daemon"]
+    proc = subprocess.Popen(cmd,
                             cwd=repo, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
     _daemon_proc[0] = proc

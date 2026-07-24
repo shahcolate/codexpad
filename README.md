@@ -47,15 +47,31 @@ earns the hardware; everything else is decoration.
 
 ## Quickstart
 
+**macOS — the ChatGPT-parity path.** Build Codexpad.app once; from then on,
+opening the app is always the fix: it stops strays, starts the daemon (with
+root, via a passwordless rule for one fixed command), supervises both so
+they restart if they die, and opens the control panel.
+
 ```bash
 git clone https://github.com/shahcolate/codex-micro-for-claude && cd codex-micro-for-claude
 pip install -r requirements.txt
+./make_login_app.sh "$(which python)"
+```
+
+Then two one-time clicks in System Settings (the script prints them too):
+Input Monitoring → **+** → `~/Applications` → **Codexpad** → on (remove any
+stale Codexpad row first — rebuilding the app voids old grants), and Login
+Items → **+** → **Codexpad**. Launch with `open ~/Applications/Codexpad.app`.
+
+**Everywhere else / simplest possible:**
+
+```bash
 python -m codexpad
 ```
 
-That one command starts the daemon and opens the control panel at
-**http://127.0.0.1:8378**. Its setup card walks you through the rest with
-buttons, not instructions:
+starts the daemon and opens the control panel at **http://127.0.0.1:8378**.
+The panel's setup card walks you through the rest with buttons, not
+instructions:
 
 1. **Wired mode** — hold the pad's front-left touch control 3s, tap past the
    three BLE channels until the underglow turns white.

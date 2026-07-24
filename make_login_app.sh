@@ -20,13 +20,14 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 USER_NAME="$(id -un)"
 WRAPPER=/usr/local/bin/codexpad-daemon
+STOPPER=/usr/local/bin/codexpad-stop
 SUDOERS=/etc/sudoers.d/codexpad
 APP="$HOME/Applications/Codexpad.app"
 
 if [ "${1:-}" = "remove" ]; then
   rm -rf "$APP"
-  sudo rm -f "$WRAPPER" "$SUDOERS"
-  echo "removed: $APP, $WRAPPER, $SUDOERS"
+  sudo rm -f "$WRAPPER" "$STOPPER" "$SUDOERS"
+  echo "removed: $APP, $WRAPPER, $STOPPER, $SUDOERS"
   echo "also remove Codexpad from Login Items and Input Monitoring by hand."
   exit 0
 fi
@@ -50,19 +51,32 @@ launchctl unload "$HOME/Library/LaunchAgents/com.codexpad.daemon.plist" 2>/dev/n
 pkill -f "codexpad.daemon" 2>/dev/null || true
 sudo rm -f /tmp/codexpad.sock
 
-# 1. root-owned wrapper -- fixed path so the sudoers rule is exact
+# 1. root-owned wrappers -- fixed paths so the sudoers rule is exact.
+#    The start wrapper CONVERGES state every run: kills any older daemon,
+#    clears the socket, then execs a fresh daemon. It does its own logging
+#    as root, so no user-shell redirect can ever hit a root-owned log file.
 sudo mkdir -p /usr/local/bin
 sudo tee "$WRAPPER" >/dev/null <<EOF
 #!/bin/bash
+pkill -f "codexpad.daemon" 2>/dev/null
+sleep 0.3
+rm -f /tmp/codexpad.sock
 cd "$REPO"
-exec "$PYTHON" -m codexpad.daemon --wait
+exec "$PYTHON" -m codexpad.daemon --wait >> /tmp/codexpad.daemon.log 2>&1
 EOF
-sudo chown root:wheel "$WRAPPER"
-sudo chmod 755 "$WRAPPER"
+sudo tee "$STOPPER" >/dev/null <<'EOF'
+#!/bin/bash
+pkill -f "codexpad.daemon" 2>/dev/null
+rm -f /tmp/codexpad.sock
+exit 0
+EOF
+sudo chown root:wheel "$WRAPPER" "$STOPPER"
+sudo chmod 755 "$WRAPPER" "$STOPPER"
+sudo rm -f /tmp/codexpad.daemon.log   # clear any root-locked leftovers
 
 # 2. passwordless sudo for ONLY that command, validated so it can't lock you out
 TMP="$(mktemp)"
-echo "$USER_NAME ALL=(root) NOPASSWD: $WRAPPER" > "$TMP"
+echo "$USER_NAME ALL=(root) NOPASSWD: $WRAPPER, $STOPPER" > "$TMP"
 if ! sudo visudo -cf "$TMP" >/dev/null; then
   echo "sudoers rule failed validation; aborting"; rm -f "$TMP"; exit 1
 fi
@@ -109,17 +123,19 @@ EOF
 cat > "$APP/Contents/MacOS/codexpad" <<EOF
 #!/bin/bash
 # granted app (Input Monitoring) + sudo (root) = both, the working chain.
-# Start the root daemon, serve the control panel, open it. Stays alive so
-# quitting the app (or logout) tears both down.
-/usr/bin/sudo -n "$WRAPPER" >> /tmp/codexpad.daemon.log 2>&1 &
-DAEMON=\$!
+# Every launch CONVERGES: stop strays, then supervise a fresh daemon and the
+# panel -- if either dies, it comes back within 2 seconds. Opening the app is
+# always the fix, exactly like the vendor's client.
 cd "$REPO"
-"$PYTHON" -m codexpad.app --no-daemon >> /tmp/codexpad.app.log 2>&1 &
-PANEL=\$!
-sleep 1
+/usr/bin/sudo -n "$STOPPER" >/dev/null 2>&1
+pkill -f "codexpad\.app --no-daemon" 2>/dev/null
+( while true; do /usr/bin/sudo -n "$WRAPPER"; sleep 2; done ) &
+( while true; do "$PYTHON" -m codexpad.app --no-daemon \\
+    >> "\$HOME/.codexpad.app.log" 2>&1; sleep 2; done ) &
+sleep 1.5
 open http://127.0.0.1:8378
-trap 'kill \$DAEMON \$PANEL 2>/dev/null; pkill -f codexpad.daemon 2>/dev/null' EXIT
-wait \$DAEMON
+trap '/usr/bin/sudo -n "$STOPPER" >/dev/null 2>&1; pkill -f "codexpad\.app --no-daemon" 2>/dev/null' EXIT
+wait
 EOF
 chmod +x "$APP/Contents/MacOS/codexpad"
 codesign --force --deep -s - "$APP" 2>/dev/null || true
