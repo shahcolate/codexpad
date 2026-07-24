@@ -273,12 +273,22 @@ stale copies of this repo: early drafts like `~/codexpad`, or a nested clone.
 blanks all six; `python -m codexpad.daemon --off` is the one-shot; pressing a
 green or red key clears it.
 
+## Native app
+
+`./make_login_app.sh "$(which python)"` builds `Codexpad.app` — an icon in
+your Applications folder that, on launch, starts the daemon, serves the
+control panel, and opens it. Add it to Login Items and codexpad comes up with
+every login: no terminal, and the settings are one click from the Dock. The
+panel is the settings surface; a fuller native menu-bar UI is on the roadmap.
+
 ## Roadmap
 
 - [x] Capture the Command Key identifiers — `ACT06`–`ACT12`, physically mapped
 - [x] Stick orientation (`a=0` down, counter-clockwise) and flick events
 - [x] Characterise `v.oai.rgbcfg` `ambient` (`keys` zone, `s`/`m` still open)
 - [x] Confirm `ACT` releases · background service · Codex handoff
+- [x] Native login app with icon (`make_login_app.sh`) — daemon + panel from the Dock
+- [ ] Native menu-bar UI so settings never touch a browser
 - [ ] Simultaneous Codex + Claude via the vendor's layer system
 - [ ] Session navigation on the joystick — flicks fire, nothing consumes them yet
 - [ ] Windows support (Linux untested but expected to work)

@@ -68,9 +68,29 @@ if ! sudo visudo -cf "$TMP" >/dev/null; then
 fi
 sudo chown root:wheel "$TMP"; sudo chmod 440 "$TMP"; sudo mv "$TMP" "$SUDOERS"
 
-# 3. the app: a granted identity that sudo-runs the wrapper (root + the grant)
+# 3. the app: a granted identity that sudo-runs the wrapper (root + the grant),
+#    serves the control panel, and opens it
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+# icon: build Codexpad.icns from docs/icon.png with the tools on every Mac
+if [ -f "$REPO/docs/icon.png" ] && command -v iconutil >/dev/null; then
+  ISET="$(mktemp -d)/Codexpad.iconset"; mkdir -p "$ISET"
+  for s in 16 32 64 128 256 512 1024; do
+    sips -z $s $s "$REPO/docs/icon.png" --out "$ISET/icon_${s}x${s}.png" >/dev/null 2>&1 || true
+  done
+  # @2x variants LaunchServices expects
+  cp "$ISET/icon_32x32.png"   "$ISET/icon_16x16@2x.png"   2>/dev/null || true
+  cp "$ISET/icon_64x64.png"   "$ISET/icon_32x32@2x.png"   2>/dev/null || true
+  cp "$ISET/icon_256x256.png" "$ISET/icon_128x128@2x.png" 2>/dev/null || true
+  cp "$ISET/icon_512x512.png" "$ISET/icon_256x256@2x.png" 2>/dev/null || true
+  cp "$ISET/icon_1024x1024.png" "$ISET/icon_512x512@2x.png" 2>/dev/null || true
+  iconutil -c icns "$ISET" -o "$APP/Contents/Resources/Codexpad.icns" 2>/dev/null || true
+fi
+ICONKEY=""
+[ -f "$APP/Contents/Resources/Codexpad.icns" ] && \
+  ICONKEY="  <key>CFBundleIconFile</key><string>Codexpad</string>"
+
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -81,24 +101,42 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleExecutable</key><string>codexpad</string>
   <key>CFBundleVersion</key><string>0.2.0</string>
   <key>CFBundleShortVersionString</key><string>0.2.0</string>
+$ICONKEY
   <key>LSUIElement</key><true/>
 </dict></plist>
 EOF
+
 cat > "$APP/Contents/MacOS/codexpad" <<EOF
 #!/bin/bash
-# granted app (Input Monitoring) + sudo (root) = both, the working chain
-exec /usr/bin/sudo -n "$WRAPPER"
+# granted app (Input Monitoring) + sudo (root) = both, the working chain.
+# Start the root daemon, serve the control panel, open it. Stays alive so
+# quitting the app (or logout) tears both down.
+/usr/bin/sudo -n "$WRAPPER" >> /tmp/codexpad.daemon.log 2>&1 &
+DAEMON=\$!
+cd "$REPO"
+"$PYTHON" -m codexpad.app --no-daemon >> /tmp/codexpad.app.log 2>&1 &
+PANEL=\$!
+sleep 1
+open http://127.0.0.1:8378
+trap 'kill \$DAEMON \$PANEL 2>/dev/null; pkill -f codexpad.daemon 2>/dev/null' EXIT
+wait \$DAEMON
 EOF
 chmod +x "$APP/Contents/MacOS/codexpad"
 codesign --force --deep -s - "$APP" 2>/dev/null || true
 
 echo "built: $APP"
 echo
-echo "Finish (one time — the app changed, so re-grant even if it was granted):"
-echo "  1. Input Monitoring: '+' > Cmd+Shift+G > $HOME/Applications > Codexpad -> ON"
-echo "     (remove any stale Codexpad row first with '-')"
-echo "  2. Login Items: '+' > $HOME/Applications > Codexpad"
-echo "  3. Start it now:  open \"$APP\""
+echo "!! The app's binary changed, so its old Input Monitoring grant is void."
+echo "!! You MUST remove the stale grant and re-add this build, or it will just"
+echo "!! sit at 'waiting' -- that has been the sticking point."
+echo
+echo "Finish (one time):"
+echo "  1. System Settings > Privacy & Security > Input Monitoring:"
+echo "       - select any existing 'Codexpad' row and click '-' to remove it"
+echo "       - click '+', Cmd+Shift+G, go to $HOME/Applications, pick Codexpad"
+echo "       - toggle Codexpad ON"
+echo "  2. Login Items: '+' > $HOME/Applications > Codexpad  (starts it each login)"
+echo "  3. Launch:  open \"$APP\"   (opens the control panel automatically)"
 echo
 echo "Watch:  tail -f /tmp/codexpad.daemon.log   (want: codexpad ready)"
 echo "Remove: ./make_login_app.sh remove"
