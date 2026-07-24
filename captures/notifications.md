@@ -50,6 +50,29 @@ like a key, with `1` then `0`.
 
 ---
 
+## Command Keys
+
+All seven Command Keys pressed in turn, as printed by the daemon's input log
+(decoded `v.oai.hid` notifications — raw frames were not retained for this
+capture; reproduce with `python tools/probe.py listen` for hex):
+
+```
+press   ACT06 (unmapped)
+press   ACT07 (unmapped)
+press   ACT08 (unmapped)
+press   ACT09 (unmapped)
+press   ACT12 (unmapped)
+press   ACT11 (unmapped)
+press   ACT10 (unmapped)
+```
+
+The identifiers continue the Agent Keys' zero-based index space at 6. The
+press order above reflects the order the keys happened to be pressed, so the
+physical-position ↔ identifier mapping is not established by this capture,
+and releases (`act: 0`) are filtered by the daemon and were not recorded.
+
+---
+
 ## Analog stick
 
 One deflection and recentre:

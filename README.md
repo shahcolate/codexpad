@@ -140,9 +140,11 @@ and acts on them:
 
 | Control | Built-in action |
 |---|---|
-| Agent Key | acknowledge that session — a green or red key returns to dim idle |
-| Dial rotate | brightness trim for the whole pad, one step per detent |
-| Dial press | acknowledge everything finished at once |
+| Agent Key (`AG00`–`AG05`) | acknowledge that session — a green or red key returns to dim idle |
+| Dial rotate (`ENC_CW`/`ENC_CC`) | brightness trim for the whole pad, one step per detent |
+| Dial press (`ENC_CLK`) | acknowledge everything finished at once |
+| Command Keys (`ACT06`–`ACT12`) | nothing built in — bind them below |
+| Stick flick (`STICK_N/E/S/W`) | nothing built in — bind them below |
 
 An amber key can't be answered from the pad — Claude Code has no remote
 approval interface — so it stays amber until you respond in the app. What a
@@ -151,20 +153,24 @@ binds any control identifier to a shell command:
 
 ```python
 COMMANDS = {
-    "AG00":    'open -a "Claude"',    # key 0 focuses the app
+    "ACT06":   'open -a "Claude"',    # first Command Key focuses the app
     "ENC_CLK": "say all clear",
+    "STICK_N": "say up",
 }
 ```
 
 Commands run detached with `CODEXPAD_KEY`, `CODEXPAD_CWD` and `CODEXPAD_STATE`
 in the environment, so a binding knows which session's key was pressed and
 what state it was in. The daemon prints the identifier of every press it sees
-— press a control, read the log, bind it. That is also how to find the
-Command Key identifiers, which aren't captured in `PROTOCOL.md` yet (§4.1);
-if you capture one, open an issue.
+— press a control, read the log, bind it.
 
-The analog stick streams `v.oai.rad` continuously and is deliberately ignored
-for now — see the roadmap.
+The analog stick streams `v.oai.rad` continuously, so the daemon quantises it:
+a hard push fires a single `STICK_N/E/S/W` flick and re-arms once the stick
+recentres. **The compass orientation is a guess** — the protocol records the
+angle's range but not its zero point — so the flick log line includes the raw
+angle. If pushing up prints `STICK_E`, the mapping is rotated: fix
+`_direction()` in `codexpad/daemon.py` and open an issue so PROTOCOL.md §4.2
+can record the true orientation.
 
 ---
 
@@ -201,6 +207,13 @@ least recently used.
 another process holds the handle. If presses print but nothing changes, that's
 expected for keys that aren't green or red; bind them via `COMMANDS`.
 
+**Keys stay lit after tests.** The device keeps the last lighting it was
+given; nothing clears it but another command. Starting the daemon blanks all
+six keys, and `python -m codexpad.daemon --off` is the one-shot version. While
+the daemon runs, pressing a green or red key clears it; amber deliberately
+doesn't clear on press — it means a session is waiting on you, and if no
+session actually is, the state is stale: restart the daemon.
+
 ---
 
 ## Protocol work
@@ -228,8 +241,9 @@ substitution — if Work Louder or OpenAI ship an official SDK, use that instead
 ## Roadmap
 
 - [ ] Remove the `sudo` requirement with a documented Input Monitoring setup
-- [ ] Capture the Command Key `k` identifiers — `COMMANDS` can bind them the moment they're known
-- [ ] Use the joystick's analog `v.oai.rad` output for session navigation
+- [x] Capture the Command Key `k` identifiers — `ACT06`–`ACT12`, see PROTOCOL.md §4.1
+- [ ] Confirm the stick's angle orientation (flick events exist; the compass mapping is unverified)
+- [ ] Session navigation on the joystick — flicks fire, but nothing consumes them yet
 - [ ] Characterise `v.oai.rgbcfg` for the ambient ring
 - [ ] Linux and Windows testing — currently macOS only
 - [ ] Reconcile with the vendor's own layer system so Codex and Claude coexist

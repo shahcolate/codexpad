@@ -185,13 +185,16 @@ Control identifiers observed:
 | `k` | Control | `act` pattern |
 |---|---|---|
 | `AG00` … `AG05` | Agent Keys, zero-indexed left to right | `1` then `0` |
+| `ACT06` … `ACT12` | Command Keys | press observed; release pattern not recorded |
 | `ENC_CW` | Dial, clockwise detent | `2` per detent |
 | `ENC_CC` | Dial, counter-clockwise detent | `2` per detent |
 | `ENC_CLK` | Dial press | `1` then `0` |
 
-`AG00` and `AG01` were confirmed directly; the remaining Agent Key identifiers follow the
-observed pattern but were not individually exercised. Command Key identifiers have not
-been captured.
+All six Agent Key identifiers have now been exercised individually. The seven Command
+Keys emit `ACT06`–`ACT12`, continuing the Agent Keys' zero-based index space at 6; all
+seven identifiers were observed as press notifications, but which physical key carries
+which identifier was not recorded, and the release pattern (presumed `1` then `0` like
+the other keys) was not captured. See `captures/notifications.md`.
 
 The front-left touch control produces no notification — layer cycling appears to be
 handled entirely in firmware.
@@ -292,7 +295,8 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | Response format, `404` on unknown method | Verified |
 | Response chunking | Verified |
 | 61-byte body limit | Verified |
-| `v.oai.hid` schema, `AG00`/`AG01`/`ENC_*` | Verified |
+| `v.oai.hid` schema, `AG00`–`AG05`/`ENC_*` | Verified |
+| `ACT06`–`ACT12` Command Key identifiers | Observed; physical mapping and release pattern not recorded |
 | `v.oai.rad` schema and range | Verified |
 | `v.oai.thstatus` accepted, returns `{"ok":1}` | Verified |
 | Colour is `0xRRGGBB` | Verified |
@@ -304,7 +308,6 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | `v.oai.rgbcfg` | Not tested |
 | `fs.*`, `sys.*`, `host.*`, `mp.*` behaviour | Names only |
 | Outbound chunking mechanism | Unknown |
-| Command Key identifiers | Not captured |
 
 ---
 

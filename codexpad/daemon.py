@@ -7,7 +7,8 @@ writes lighting commands to the device over vendor HID.
 
 Input flows back too: a reader thread dispatches the device's own notifications.
 Pressing an Agent Key acknowledges a finished session, the dial trims brightness
-and clears the board, and COMMANDS binds any control to a shell command.
+and clears the board, stick pushes become one-shot STICK_N/E/S/W flick events,
+and COMMANDS binds any control to a shell command.
 
 Usage:
     python -m codexpad.daemon           # run the daemon
@@ -59,17 +60,19 @@ STATES = {
 # acknowledges everything finished at once.
 #
 # COMMANDS binds any control to a shell command on top of that, run detached
-# with CODEXPAD_KEY, CODEXPAD_CWD and CODEXPAD_STATE in the environment. The
-# daemon prints the identifier of every press it sees -- press the control,
-# read the log, bind it. Command Key identifiers are not captured yet; see
-# PROTOCOL.md §4.1.
+# with CODEXPAD_KEY, CODEXPAD_CWD and CODEXPAD_STATE in the environment.
+# Known identifiers (PROTOCOL.md §4.1): AG00-AG05 Agent Keys, ACT06-ACT12
+# Command Keys, ENC_CW/ENC_CC/ENC_CLK dial, and the synthetic STICK_N/E/S/W
+# flick events. The daemon prints the identifier of every press it sees.
 COMMANDS = {
-    # "AG00":    'open -a "Claude"',
+    # "ACT06":   'open -a "Claude"',
     # "ENC_CLK": "say all clear",
+    # "STICK_N": "say up",
 }
 
 _seq = [0]
 _trim = [1.0]                 # global brightness trim, dial-adjustable 0.1-1.0
+_stick = [None]               # flick currently held, so one push fires once
 _lock = threading.RLock()     # serialises HID writes and the slot tables
 
 
@@ -182,11 +185,50 @@ def trim(handle, delta):
         set_slot(handle, slot, state)
 
 
+def _direction(a):
+    """Quantise a normalised angle into a compass quadrant.
+
+    Assumes a=0 is north and the angle increases clockwise -- the hardware has
+    NOT confirmed this orientation (PROTOCOL.md §4.2 records range, not zero
+    point). The flick log line carries the raw angle so the assumption can be
+    checked on a real stick; if flicks read rotated, fix the buckets here.
+    """
+    if a >= 0.875 or a < 0.125:
+        return "N"
+    if a < 0.375:
+        return "E"
+    if a < 0.625:
+        return "S"
+    return "W"
+
+
+def flick(a, d):
+    """Quantise stick deflection into one bindable flick per push.
+
+    The stick streams v.oai.rad continuously while deflected, so this fires
+    once when deflection crosses 0.7 and re-arms only after it falls below
+    0.3 -- the hysteresis stops a wobbling hold from machine-gunning events.
+    """
+    if _stick[0] is not None:
+        if d < 0.3:
+            _stick[0] = None
+        return
+    if d >= 0.7:
+        name = "STICK_" + _direction(a)
+        _stick[0] = name
+        print(f"  flick   {name} (a={a:.2f})", flush=True)
+        if name in COMMANDS:
+            run_command(name, None, None)
+
+
 def dispatch(handle, msg):
     """Turn one device notification into an action (PROTOCOL.md §4.1)."""
-    if msg.get("m") != "v.oai.hid":
-        return          # v.oai.rad (analog stick): on the roadmap, ignored
     params = msg.get("p") or {}
+    if msg.get("m") == "v.oai.rad":
+        flick(params.get("a") or 0, params.get("d") or 0)
+        return
+    if msg.get("m") != "v.oai.hid":
+        return
     key, act = params.get("k", "?"), params.get("act")
     if act == 0:
         return          # releases carry no meaning here
@@ -327,12 +369,15 @@ def main():
         return
 
     if args.test:
-        for state in ("idle", "working", "blocked", "done", "error"):
-            print(f"slot 0 -> {state}", flush=True)
-            set_slot(handle, 0, state)
-            time.sleep(2.5)
-        set_slot(handle, 0, "off")
-        handle.close()
+        try:
+            for state in ("idle", "working", "blocked", "done", "error"):
+                print(f"slot 0 -> {state}", flush=True)
+                set_slot(handle, 0, state)
+                time.sleep(2.5)
+        finally:
+            # also on ctrl-c mid-cycle: never leave the test key lit
+            set_slot(handle, 0, "off")
+            handle.close()
         return
 
     blank_all(handle)
