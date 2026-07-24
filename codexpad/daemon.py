@@ -292,10 +292,11 @@ def flick(a, d):
 def set_ring(handle, on):
     """Light the ambient ring as the mic indicator.
 
-    v.oai.rgbcfg is uncharacterised (PROTOCOL.md §5.3) and this is its first
-    live use: single-zone partial updates, split across two frames like
-    set_slot to fit the 61-byte body, fire and forget. If the ring stays dark
-    the mic events still fire -- probe the method and report what it returns.
+    Single-zone partial updates, split across two frames like set_slot to fit
+    the 61-byte body, fire and forget. This path is what confirmed the ambient
+    zone on hardware (PROTOCOL.md §5.3) -- but only for c/e/b at solid, and
+    replies are never read. If the ring stays dark the mic events still fire;
+    probe the method directly and report what it returns.
     """
     if on:
         _rpc(handle, "v.oai.rgbcfg", {"ambient": {"c": MIC_COLOR[0]}})

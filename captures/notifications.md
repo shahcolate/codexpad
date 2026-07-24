@@ -107,9 +107,11 @@ release requires `act: 0` notifications from the mic switches, confirming
 that `ACT` keys emit releases (directly shown for `ACT10`/`ACT11`).
 
 In the same session the ambient ring lit red while the mic was open and
-cleared on close — the first confirmation of `v.oai.rgbcfg`: the `ambient`
+cleared on close — our first confirmation of `v.oai.rgbcfg`: the `ambient`
 zone accepts split partial updates, and `c`, `e` (`1`/`0`) and `b` behave as
-documented. See PROTOCOL.md §5.3.
+documented. This is a visual observation at one colour (`0xFF0000`) with the
+replies unread — the daemon sends these frames fire-and-forget. See
+PROTOCOL.md §5.3.
 
 ---
 

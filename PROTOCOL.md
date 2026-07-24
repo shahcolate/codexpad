@@ -57,10 +57,16 @@ power loss reliably**: after unplugging (the pad flashes blue — BLE advertisin
 battery), it can come back in BLE mode and must be switched to wired again.
 
 **An existing BLE bond dominates.** With the pad paired to a host, it returns to BLE
-and reconnects — the vendor's ChatGPT client drives it over Bluetooth, so the pad
-"works" for that client while entirely absent from the USB bus. Wired mode holds
-reliably only after the Bluetooth pairing is removed on the host. The transport is
-therefore also the ownership switch: one host stack at a time, selected physically.
+and reconnects — the vendor's ChatGPT client went on driving it over Bluetooth while
+the pad was entirely absent from the USB bus. Wired mode holds reliably only after the
+Bluetooth pairing is removed on the host.
+
+That makes the transport a practical ownership switch in this configuration, but note
+what was *not* tested: whether the ChatGPT client can also drive the pad over USB
+(it was only ever observed working over BLE, never denied USB), and whether the device
+can serve a USB and a BLE host concurrently. "One host stack at a time" describes every
+session observed here; it is not a device capability that was established. Both gaps are
+one experiment each — see §6.
 
 **In BLE mode the pad is still an HID device** — HID over GATT, same `0x303a:0x8360`
 identity and the same six collections, so `hid.enumerate()` lists it identically on
@@ -306,15 +312,21 @@ vendor client's enumeration and have not each been individually exercised.
 
 ### 5.3 `v.oai.rgbcfg` — zone lighting
 
-Configures the two lighting zones: `ambient` (outer ring) and `keys` (under-keycap
-backlight). Each zone takes `e` (effect), `b` (brightness), `s` (speed), `c` (colour) and
-`m` (an additional effect parameter of undetermined meaning).
+Configures lighting zones. The zone names `ambient` (outer ring) and `keys` (under-keycap
+backlight) and the per-zone fields `e` (effect), `b` (brightness), `s` (speed), `c`
+(colour) and `m` (an additional parameter of undetermined meaning) are taken from the
+vendor client's schema, not from probing the device; only the subset below was exercised.
 
 Given the 61-byte body limit, a two-zone update cannot fit in a single frame.
 **Single-zone partial updates to `ambient` are confirmed on hardware**: codexpad's mic
 indicator sends an `{"c": …}` frame followed by `{"e": 1, "b": 1}` (mirroring the §5.1
-split) and the ring lights in the given colour; `{"e": 0, "b": 0}` clears it. The `keys`
-zone, the `s` and `m` fields, and effects beyond solid have not been exercised.
+split) and the ring lights; `{"e": 0, "b": 0}` clears it. Scope of that confirmation:
+one zone, the fields `c`/`e`/`b`, effect `1`, and a single colour — the default mic red,
+`0xFF0000`. Red rendering red does at least rule out a byte swap on this zone (a BGR
+reading would have shown blue), but arbitrary colours were not stepped through. The
+frames are sent fire-and-forget, so the method's reply and error behaviour are unknown;
+the confirmation is visual. The `keys` zone, the `s` and `m` fields, and effects beyond
+solid have not been exercised at all.
 
 ### 5.4 Other methods
 
@@ -336,9 +348,20 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 
 ## 6. Verification status
 
+All statuses below are from one device, one host (macOS, Apple Silicon) and firmware
+`v0.4.1`. "Verified" means observed directly on that setup — not that it was replicated
+across devices or hosts.
+
 | Claim | Status |
 |---|---|
-| VID/PID, collections, transport | Verified |
+| VID/PID, HID collections | Verified |
+| BLE mode: USB charges but does not enumerate | Verified |
+| An existing BLE bond returns the pad to BLE; wired holds after unpairing | Verified |
+| Wired mode does not reliably survive power loss | Verified |
+| Identical `hid.enumerate()` identity on BLE (HID over GATT) | Verified |
+| Vendor protocol over the BLE HID transport | Not tested — all traffic here is USB |
+| Whether the ChatGPT client can drive the pad over **USB** | **Not tested** — it was only ever seen on BLE, never refused USB |
+| Whether the pad can serve a USB and a BLE host concurrently | **Not tested** — "one at a time" is observation, not an established limit |
 | Frame layout, length semantics | Verified |
 | `id` envelope key; `i` silently ignored | Verified |
 | Response format, `404` on unknown method | Verified |
@@ -355,8 +378,10 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | `sys.version` | Verified |
 | Effects `0`, `2`–`6` | Documented, not individually tested |
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
-| `AG02`–`AG05` identifiers | Inferred from pattern |
-| `v.oai.rgbcfg` `ambient` zone: partial updates, `c`/`e`/`b` | Verified — mic ring lights and clears |
+| `AG00`–`AG05` physical positions | Verified (stated-order pass, `captures/`) |
+| `v.oai.rgbcfg` `ambient`: split partial updates, `c`/`e`/`b`, effect `1` | Verified — mic ring lights and clears; visual only, replies not read |
+| `v.oai.rgbcfg` `ambient` colours other than `0xFF0000` | Not tested (red does rule out a byte swap) |
+| `v.oai.rgbcfg` zone/field names beyond those exercised | From the vendor client's schema, not probed |
 | `v.oai.rgbcfg` `keys` zone, `s`/`m`, non-solid effects | Not tested |
 | `fs.*`, `sys.*`, `host.*`, `mp.*` behaviour | Names only |
 | Outbound chunking mechanism | Unknown |
