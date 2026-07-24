@@ -43,6 +43,11 @@ DEFAULTS = {
     },
     "commands": {},
     "mic_color": "FF0000",
+    # Run by the PANEL in your login session when the mic opens/closes --
+    # the place for dictation triggers and AppleScript, which a root daemon
+    # can't reach. Left empty they do nothing.
+    "mic_on_command": "",
+    "mic_off_command": "",
     "port": PORT,
 }
 
@@ -67,6 +72,9 @@ def load():
         cfg["commands"] = user["commands"]
     if isinstance(user.get("mic_color"), str):
         cfg["mic_color"] = user["mic_color"]
+    for key in ("mic_on_command", "mic_off_command"):
+        if isinstance(user.get(key), str):
+            cfg[key] = user[key]
     if isinstance(user.get("port"), int):
         cfg["port"] = user["port"]
     return cfg
@@ -75,7 +83,8 @@ def load():
 def save(user_cfg):
     """Write the user-editable subset to CONFIG_PATH."""
     keep = {key: user_cfg[key]
-            for key in ("states", "commands", "mic_color", "port")
+            for key in ("states", "commands", "mic_color",
+                        "mic_on_command", "mic_off_command", "port")
             if key in user_cfg}
     with open(CONFIG_PATH, "w") as fh:
         json.dump(keep, fh, indent=2)

@@ -29,9 +29,23 @@ AGENT="$HOME/Library/LaunchAgents/cc.codexpad.login.plist"
 if [ "${1:-}" = "remove" ]; then
   launchctl unload "$AGENT" 2>/dev/null || true
   rm -f "$AGENT"
-  sudo rm -f "$WRAPPER" "$SUDOERS"
-  echo "removed: login agent, $WRAPPER, $SUDOERS"
+  if [ -d "$HOME/Applications/Codexpad.app" ]; then
+    # the wrapper and sudoers rule are shared with Codexpad.app — deleting
+    # them here would silently break the app's passwordless start
+    echo "removed: login agent (kept $WRAPPER and $SUDOERS — Codexpad.app uses them;"
+    echo "         to remove everything use ./make_login_app.sh remove)"
+  else
+    sudo rm -f "$WRAPPER" "$SUDOERS"
+    echo "removed: login agent, $WRAPPER, $SUDOERS"
+  fi
   exit 0
+fi
+
+if [ -d "$HOME/Applications/Codexpad.app" ]; then
+  echo "Codexpad.app is installed — it already starts the daemon at login and"
+  echo "shares $WRAPPER with this script. Installing both would fight over the"
+  echo "pad. Use the app, or './make_login_app.sh remove' first."
+  exit 1
 fi
 
 PYTHON="${1:-$(command -v python3)}"
@@ -47,11 +61,12 @@ echo "passwordless rule for a single command ($WRAPPER)."
 echo
 
 # stop anything else that might fight over the pad / socket
-sudo ./service.sh remove 2>/dev/null || true
+sudo "$REPO/service.sh" remove 2>/dev/null || true
 launchctl unload "$HOME/Library/LaunchAgents/com.codexpad.daemon.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.codexpad.daemon.plist"
 launchctl unload "$AGENT" 2>/dev/null || true
-pkill -f "codexpad.daemon" 2>/dev/null || true
-sudo rm -f /tmp/codexpad.sock
+sudo pkill -f "[-]m codexpad[.]daemon" 2>/dev/null || true
+sudo rm -f /tmp/codexpad.sock /tmp/codexpad.daemon.log
 
 # 1. root-owned wrapper -- fixed path so the sudoers rule can be exact
 sudo mkdir -p /usr/local/bin

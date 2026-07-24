@@ -42,7 +42,9 @@ PYTHON="${1:-$(command -v python3)}"
 # don't fight other copies of the daemon
 launchctl bootout system/$LABEL 2>/dev/null || true
 launchctl bootout "gui/$(id -u "${SUDO_USER:-root}")/com.codexpad.daemon" 2>/dev/null || true
-pkill -f "codexpad.daemon" 2>/dev/null || true
+launchctl bootout "gui/$(id -u "${SUDO_USER:-root}")/cc.codexpad.login" 2>/dev/null || true
+pkill -f "[-]m codexpad[.]daemon" 2>/dev/null || true
+pkill -f "/usr/local/bin/codexpad-daemon" 2>/dev/null || true
 rm -f /tmp/codexpad.sock
 
 cat > "$PLIST" <<EOF

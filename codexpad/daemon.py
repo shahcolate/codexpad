@@ -105,6 +105,28 @@ _stick = [None]               # flick currently held, so one push fires once
 _paused = [False]             # True: the vendor client owns the pad
 _lock = threading.RLock()     # serialises HID writes and the slot tables
 
+# Pause must survive a daemon restart: the login app supervises the daemon
+# with a restart loop, and a respawn that forgot it was paused would repaint
+# Claude states all over the vendor client mid-handoff.
+PAUSE_FLAG = SOCK_PATH + ".paused"
+
+# --- event feed --------------------------------------------------------------
+# The panel long-polls {"cmd": "wait_event"} to mirror pad activity into the
+# user's login session -- that's where mic open/close can trigger things a
+# root daemon never could (dictation, AppleScript). Tiny ring buffer; a
+# client passes the last seq it saw and blocks until something newer.
+_event_seq = [0]
+_event_log = []               # [(seq, name)], newest last, capped
+_event_cond = threading.Condition()
+
+
+def emit_event(name):
+    with _event_cond:
+        _event_seq[0] += 1
+        _event_log.append((_event_seq[0], name))
+        del _event_log[:-64]
+        _event_cond.notify_all()
+
 
 def _rpc(handle, method, params=None):
     """Send one JSON-RPC frame. Fire and forget; replies are never awaited.
@@ -192,14 +214,30 @@ def decode(report):
 
 
 def run_command(key, cwd, state):
-    """Run a COMMANDS binding, detached, never blocking the daemon."""
+    """Run a COMMANDS binding, detached, never blocking the daemon.
+
+    A sudo'd daemon drops to the invoking user first: the bindings live in a
+    user-writable config file, and a root daemon must not execute those as
+    root. (Commands that need the login session anyway -- dictation,
+    AppleScript -- belong in mic_on_command/mic_off_command, which the panel
+    runs; see wait_event.)
+    """
     env = dict(os.environ,
                CODEXPAD_KEY=key,
                CODEXPAD_CWD=cwd or "",
                CODEXPAD_STATE=state or "")
+    kwargs = {}
+    if getattr(os, "geteuid", lambda: -1)() == 0 and os.environ.get("SUDO_USER"):
+        kwargs["user"] = os.environ["SUDO_USER"]
     try:
-        subprocess.Popen(COMMANDS[key], shell=True, env=env,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.Popen(COMMANDS[key], shell=True, env=env,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, **kwargs)
+        except TypeError:            # Python < 3.9: no user=; run as-is
+            subprocess.Popen(COMMANDS[key], shell=True, env=env,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
         print(f"  run     {key} -> {COMMANDS[key]}", flush=True)
     except Exception as exc:
         print(f"  run     {key} failed: {exc}", flush=True)
@@ -273,6 +311,7 @@ def _mic_set(handle, is_open, how):
     print(f"  mic     {f'ON ({how})' if is_open else 'OFF'}", flush=True)
     set_ring(handle, is_open)
     name = "MIC_ON" if is_open else "MIC_OFF"
+    emit_event(name)
     if name in COMMANDS:
         run_command(name, None, None)
 
@@ -396,16 +435,23 @@ def reader(handle):
 
 # --- device lifecycle ------------------------------------------------------
 class Device:
-    """Wraps the hid handle so the daemon survives unplug/replug.
+    """Wraps the hid handle so the daemon survives unplug/replug -- and can
+    start before the pad is even reachable.
 
     Writes and reads mark the device lost on failure instead of raising; the
-    watch() loop (run in a background thread) reopens the pad when it comes
-    back and repaints the current session states.
+    watch() loop (run in a background thread) opens the pad whenever it shows
+    up and repaints the current session states. While lost it keeps a
+    diagnosis current: `seen` says whether the pad is visible on USB at all
+    (enumeration needs no permission), `last_error` is the open failure
+    verbatim -- together they tell "not plugged in / BLE mode" apart from
+    "macOS is blocking the open", and status replies carry both.
     """
 
-    def __init__(self, handle):
+    def __init__(self, handle=None):
         self._h = handle
-        self.lost = False
+        self.lost = handle is None
+        self.seen = None          # pad visible in hid.enumerate()?
+        self.last_error = ""      # last open() failure, verbatim
 
     def write(self, data):
         if self.lost:
@@ -443,44 +489,83 @@ class Device:
             self.lost = True
             print("  device  unplugged? waiting for it to come back", flush=True)
 
+    def status(self):
+        return {"connected": not self.lost, "seen": self.seen,
+                "error": self.last_error}
+
+    def diagnosis(self):
+        """One line saying why the pad is unusable right now."""
+        if not self.lost:
+            return ""
+        if self.seen:
+            why = ("the pad is on USB but opening it is blocked — that's "
+                   "macOS Input Monitoring. Re-grant it to whatever runs the "
+                   "daemon (Codexpad.app users: REMOVE the old row first — "
+                   "every rebuild voids the grant — then re-add and relaunch)")
+            if self.last_error:
+                why += f" [{self.last_error}]"
+            return why
+        if self.seen is False:
+            return ("the pad isn't on USB — data-capable cable? wired mode? "
+                    "(hold the front-left touch key 3s, tap until the "
+                    "underglow turns white, and quit the ChatGPT app)")
+        return "still probing USB for the pad…"
+
+    def _try_open(self):
+        try:
+            self.seen = any(d["vendor_id"] == VID and d["product_id"] == PID
+                            for d in hid.enumerate())
+        except Exception:
+            self.seen = None
+        try:
+            fresh = hid.device()
+            fresh.open(VID, PID)
+            fresh.set_nonblocking(True)
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+        self.last_error = ""
+        return fresh
+
     def watch(self):
+        announced = False
         while True:
-            time.sleep(2)
             if not self.lost:
+                announced = False
+                time.sleep(2)
                 continue
-            try:
-                fresh = hid.device()
-                fresh.open(VID, PID)
-                fresh.set_nonblocking(True)
-            except Exception:
+            fresh = self._try_open()
+            if fresh is None:
+                if not announced:
+                    print("  device  waiting for the Codex Micro: "
+                          + self.diagnosis(), flush=True)
+                    announced = True
+                time.sleep(2)
                 continue
             self.close()
             self._h = fresh
             self.lost = False
-            print("  device  back — repainting", flush=True)
+            announced = False
+            print("  device  connected — painting", flush=True)
             with _lock:
                 lit = [(s, st) for s, st in _slot_state.items()
                        if st and st != "off"]
             if not _paused[0]:
+                blank_all(self)     # clear whatever the pad was showing
                 for slot, state in lit:
                     set_slot(self, slot, state)
 
 
-def wait_for_device():
-    """Poll until the pad can be opened. Used by the login service, where
-    exiting loudly would just make launchd respawn-loop."""
-    printed = False
-    while True:
-        try:
-            handle = hid.device()
-            handle.open(VID, PID)
-            return handle
-        except OSError:
-            if not printed:
-                print("waiting for the Codex Micro (wired mode? Input "
-                      "Monitoring for this python?)...", flush=True)
-                printed = True
-            time.sleep(2)
+def _pad_error(handle):
+    """None if the pad is writable, else an error dict saying exactly why.
+
+    Lighting commands used to be absorbed silently while the pad was away —
+    the panel's buttons "worked" and nothing lit. Now they come back with the
+    live diagnosis instead.
+    """
+    if isinstance(handle, Device) and handle.lost:
+        return {"error": "pad not connected: " + handle.diagnosis()}
+    return None
 
 
 def open_device():
@@ -525,17 +610,41 @@ def handle_request(handle, req):
     """
     if "cmd" in req:
         cmd = req["cmd"]
+        if cmd in ("preview", "rainbow", "off", "trim", "resume"):
+            pad_err = _pad_error(handle)
+            if pad_err:
+                return pad_err
         if cmd == "ping":
             pass
         elif cmd == "status":
             with _lock:
                 by_slot = {s: c for c, s in _slots.items()}
                 return {"ok": 1, "trim": _trim[0], "paused": _paused[0],
+                        "device": (handle.status() if isinstance(handle, Device)
+                                   else {"connected": True, "seen": True,
+                                         "error": ""}),
                         "mic": {"open": _mic["open"], "latched": _mic["latched"]},
                         "slots": [{"slot": i,
                                    "state": _slot_state.get(i) or "off",
                                    "cwd": by_slot.get(i)}
                                   for i in range(NSLOTS)]}
+        elif cmd == "wait_event":
+            after = int(req.get("after", -1))
+            if after < 0 or after > _event_seq[0]:
+                # negative: only future events. Ahead of us: the client's
+                # cursor is from a previous daemon life — reset it, or its
+                # events would stall until the count caught up again.
+                after = _event_seq[0]
+            deadline = time.time() + min(float(req.get("timeout", 20)), 25)
+            with _event_cond:
+                while _event_seq[0] <= after:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        break
+                    _event_cond.wait(remaining)
+                newer = [e for e in _event_log if e[0] > after]
+            return {"ok": 1, "seq": newer[-1][0] if newer else after,
+                    "events": [n for _, n in newer]}
         elif cmd == "trim":
             with _lock:
                 _trim[0] = min(1.0, max(0.1, round(float(req.get("value", 1.0)), 2)))
@@ -554,12 +663,20 @@ def handle_request(handle, req):
                 _slot_state.clear()
                 _slot_state.update(snapshot)
                 _paused[0] = True
+            try:                      # survive a daemon restart mid-handoff
+                open(PAUSE_FLAG, "w").close()
+            except OSError:
+                pass
             print("  pause   pad handed to the vendor client", flush=True)
         elif cmd == "resume":
             with _lock:
                 _paused[0] = False
                 lit = [(s, st) for s, st in _slot_state.items()
                        if st and st != "off"]
+            try:
+                os.unlink(PAUSE_FLAG)
+            except OSError:
+                pass
             for slot, state in lit:
                 set_slot(handle, slot, state)
             print("  resume  pad is ours again", flush=True)
@@ -616,6 +733,30 @@ def handle_request(handle, req):
     return {"ok": 1}
 
 
+def _client(handle, conn):
+    """One socket client, on its own thread.
+
+    A thread per connection (with a recv timeout) means a stuck or idle
+    client can never wedge the daemon — and wait_event long-polls can block
+    here without holding anyone else up.
+    """
+    try:
+        conn.settimeout(3.0)
+        raw = conn.recv(8192).decode()
+        req = json.loads(raw) if raw.strip() else {}
+        reply = handle_request(handle, req)
+        if "cmd" in req:                # notify.py never reads; the app does
+            reply["v"] = VERSION        # lets the app spot a stale daemon
+            try:
+                conn.send(json.dumps(reply).encode())
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"  err {exc}", flush=True)
+    finally:
+        conn.close()
+
+
 def serve(handle):
     if os.path.exists(SOCK_PATH):
         try:
@@ -637,23 +778,14 @@ def serve(handle):
         threading.Thread(target=handle.watch, daemon=True).start()
     print(f"codexpad ready on {SOCK_PATH} "
           f"({NSLOTS} agent keys, config {config.CONFIG_PATH})", flush=True)
+    if isinstance(handle, Device) and handle.lost:
+        print("  (socket is live before the pad is: the panel can already "
+              "see status and say what's wrong)", flush=True)
 
     while True:
         conn, _ = srv.accept()
-        try:
-            raw = conn.recv(8192).decode()
-            req = json.loads(raw) if raw.strip() else {}
-            reply = handle_request(handle, req)
-            if "cmd" in req:            # notify.py never reads; the app does
-                reply["v"] = VERSION    # lets the app spot a stale daemon
-                try:
-                    conn.send(json.dumps(reply).encode())
-                except Exception:
-                    pass
-        except Exception as exc:
-            print(f"  err {exc}", flush=True)
-        finally:
-            conn.close()
+        threading.Thread(target=_client, args=(handle, conn),
+                         daemon=True).start()
 
 
 def main():
@@ -663,18 +795,17 @@ def main():
     ap.add_argument("--off", action="store_true",
                     help="turn all keys off, then exit")
     ap.add_argument("--wait", action="store_true",
-                    help="wait for the device instead of exiting when it "
-                         "can't be opened (used by the login service)")
+                    help="serve immediately and keep watching for the device "
+                         "instead of exiting when it can't be opened (used "
+                         "by the login service)")
     args = ap.parse_args()
 
-    handle = wait_for_device() if args.wait else open_device()
-
-    if args.off:
-        blank_all(handle)
-        handle.close()
-        return
-
-    if args.test:
+    if args.off or args.test:
+        handle = open_device()          # one-shots need the pad now
+        if args.off:
+            blank_all(handle)
+            handle.close()
+            return
         try:
             for state in ("idle", "working", "blocked", "done", "error"):
                 print(f"slot 0 -> {state}", flush=True)
@@ -686,8 +817,19 @@ def main():
             handle.close()
         return
 
-    handle = Device(handle)   # survives unplug/replug from here on
-    blank_all(handle)
+    _paused[0] = os.path.exists(PAUSE_FLAG)   # a restart forgets nothing
+    if _paused[0]:
+        print("  pause   still in effect from before the restart", flush=True)
+
+    if args.wait:
+        # Socket first, device whenever it shows up: while the pad is in BLE
+        # mode or blocked by a missing grant, the panel still reaches us and
+        # relays the diagnosis instead of showing a dead daemon.
+        handle = Device()
+    else:
+        handle = Device(open_device())  # manual runs still fail fast, loudly
+        if not _paused[0]:
+            blank_all(handle)
     try:
         serve(handle)
     except KeyboardInterrupt:

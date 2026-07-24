@@ -78,6 +78,13 @@ Then `open ~/Applications/Codexpad.app`. Put the pad in **wired mode**
 watch `tail -f /tmp/codexpad.daemon.log` for `codexpad ready`. Finally, in
 the panel, click **Install hooks** and fully restart Claude Code.
 
+The panel's status strip always tells you where you stand — daemon
+reachable, pad connected, pad visible-but-blocked (Input Monitoring), or
+pad off USB — with the exact fix for each. When you later `git pull` new
+code, run **`./make_login_app.sh update`**: it refreshes the root wrappers
+without touching the app bundle, so your Input Monitoring grant survives.
+Only a full rebuild voids the grant.
+
 ### Anywhere else — one command
 
 ```bash
@@ -139,8 +146,6 @@ or `~/.codexpad.json`), executed with `CODEXPAD_KEY`, `CODEXPAD_CWD` and
 ```json
 "commands": {
   "ACT06":   "open -a 'Claude'",
-  "MIC_ON":  "shortcuts run 'Start Dictation'",
-  "MIC_OFF": "shortcuts run 'Stop Dictation'",
   "STICK_N": "say up"
 }
 ```
@@ -149,8 +154,20 @@ or `~/.codexpad.json`), executed with `CODEXPAD_KEY`, `CODEXPAD_CWD` and
 logical key. Hold it and it's open for exactly the hold; double-press
 latches until the next double-press. The ambient ring lights red while open
 (colour configurable) — confirmed on hardware, the first characterisation of
-the device's `v.oai.rgbcfg` zone lighting. If the daemon runs as root, your
-bindings run as root too — keep them to things you'd sudo anyway.
+the device's `v.oai.rgbcfg` zone lighting.
+
+To make the mic *do* something, use `mic_on_command` / `mic_off_command`
+(two fields in the panel's Mic card): the **panel** runs those in your login
+session — where dictation shortcuts, AppleScript and Raycast actually work,
+and where a root daemon can't reach. macOS dictation, for example (enable
+the double-Fn shortcut in Keyboard settings, grant the app Accessibility):
+
+```json
+"mic_on_command": "osascript -e 'tell application \"System Events\" to key code 63' -e 'tell application \"System Events\" to key code 63'"
+```
+
+The generic `commands` table runs from the daemon; a sudo'd daemon drops
+those to your user first, so config bindings never execute as root.
 
 ## Claude or Codex — the handoff
 
@@ -177,16 +194,18 @@ Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
   "states": {
     "working": {"color": "0000FF", "effect": 4, "brightness": 1.0}
   },
-  "commands": {"MIC_ON": "shortcuts run 'Start Dictation'"},
-  "mic_color": "FF0000"
+  "commands": {"ACT06": "open -a 'Claude'"},
+  "mic_color": "FF0000",
+  "mic_on_command": "",
+  "mic_off_command": ""
 }
 ```
 
 Effects: `0` off, `1` solid, `2` snake, `3` rainbow, `4` breath, `5`
 gradient, `6` shallow breath. Colours are `RRGGBB` — verified, no byte
 swap. The daemon's socket takes commands directly: `rainbow`, `off`,
-`reload`, `pause`, `resume`, `status`, `trim`, e.g.
-`printf '{"cmd":"rainbow"}' | nc -U /tmp/codexpad.sock`.
+`reload`, `pause`, `resume`, `status`, `trim`, `wait_event` (long-poll for
+mic events), e.g. `printf '{"cmd":"status"}' | nc -U /tmp/codexpad.sock`.
 
 ## How it works
 
@@ -197,8 +216,11 @@ Claude Code hook ──stdin JSON──▶ notify.py ──unix socket──▶ 
 ```
 
 - **The daemon holds the HID handle** — opening per hook is slow and races.
-  It survives unplug/replug (reconnects and repaints) and waits for the pad
-  when absent.
+  It survives unplug/replug (reconnects and repaints), and its socket comes
+  up **before** the pad does: while the device is missing or blocked, the
+  daemon still answers `status` with a live diagnosis (visible on USB but
+  unopenable = permission; not visible = cable/BLE mode), and lighting
+  commands return that diagnosis instead of silently doing nothing.
 - **`notify.py` never fails** — every error is swallowed, so a dead daemon
   can't break a Claude Code turn. `CODEXPAD_DEBUG=1` logs to
   `/tmp/codexpad.log`.
@@ -235,11 +257,18 @@ Hard-won, all reproduced on real hardware. Start with the transport — most
 | Flashes blue when unplugged; "wired" doesn't stick | BLE advertising; the mode reverts on power loss, bonds dominate | Re-check for white after any unplug |
 | Charges, solid indicator, `system_profiler SPUSBDataType` empty | No USB data path | Data cable (the boxed one), direct port — or it's in BLE mode |
 | `open failed` with the pad on `[USB]` | macOS Input Monitoring | Grant terminal **and** python; on stubborn Macs see the truth table below |
+| Panel strip: *pad on USB but macOS blocks opening it* | The daemon's grant is missing or stale | Input Monitoring: **remove** the old Codexpad row, re-add the app, toggle on, reopen |
+| Rebuilt the app and it all sits at "waiting" again | **Rebuilding voids the old grant** (the bundle is re-signed) | Same remove-and-re-add dance — or avoid it: `./make_login_app.sh update` keeps the bundle |
+| Panel buttons "work" but nothing lights | On daemons ≥ 0.3.0 they *tell you why* instead | Read the reply / status strip; on older builds, update |
 | Daemon under launchd waits forever, pad wired | launchd can't hold an Input Monitoring grant | Use Codexpad.app (a granted app), not a plist |
 | `permission denied: /tmp/codexpad.daemon.log` | Root-owned log from earlier sudo runs breaks user redirects | `sudo rm -f` it; current wrappers log as root by design |
 | One key lights by itself; panel says daemon unreachable | A **stale daemon build** misreads panel commands as hook messages | Restart the daemon from the up-to-date repo; the panel names mixed builds |
 | Keys stay lit after tests | The device keeps its last lighting | Any daemon start blanks; `--off`; press green/red keys |
 | Hooks don't fire | Claude Code reads settings at launch | Fully quit and reopen; Desktop: **Code** tab + **Local** environment |
+| Need to stop everything | The app supervises and revives things by design | `sudo codexpad-stop` (daemon only) or `./make_login_app.sh remove` (stops, then uninstalls) |
+
+Logs: daemon → `/tmp/codexpad.daemon.log` (safe to `tail -f`), panel →
+`~/.codexpad.app.log`, hooks (with `CODEXPAD_DEBUG=1`) → `/tmp/codexpad.log`.
 
 **The macOS permission truth table** (some Macs need root *and* Input
 Monitoring at once — diagnose with `python tools/probe.py color 0 00FF00`
@@ -261,13 +290,19 @@ codexpad() { sudo -n /usr/local/bin/codexpad-daemon & (cd ~/codex-micro-for-clau
 EOF
 ```
 
+(Adjust `~/codex-micro-for-claude` if your clone lives elsewhere. If
+Codexpad.app is installed, prefer opening the app — the function and the
+app's supervisor would otherwise both spawn daemons.)
+
 ## Roadmap
 
 - [x] Protocol: frames, envelope, notifications, lighting, key map, stick orientation, `rgbcfg` ambient, BLE HID identity
 - [x] Buttons, dial, stick flicks, mic state machine with ring indicator
 - [x] Control panel, presets, hook installer, health checks
-- [x] Codexpad.app: self-healing launch, login start, icon
-- [x] Codex handoff (pause/resume) + the transport discovery
+- [x] Codexpad.app: self-healing launch, login start, icon, grant-preserving `update`
+- [x] Codex handoff (pause/resume, survives restarts) + the transport discovery
+- [x] Self-diagnosing panel: daemon/pad status strip with the exact fix
+- [x] Mic → your login session: `mic_on_command`/`mic_off_command` (dictation-ready)
 - [ ] Simultaneous Codex + Claude via the vendor's layer system
 - [ ] Native menu-bar app (panel without the browser)
 - [ ] Joystick session navigation; `keys` zone; `s`/`m` fields

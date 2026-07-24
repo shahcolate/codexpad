@@ -21,6 +21,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -58,6 +59,19 @@ def daemon_running():
 _daemon_proc = [None]
 
 WRAPPER_BIN = "/usr/local/bin/codexpad-daemon"
+DAEMON_LOG = "/tmp/codexpad.daemon.log"          # the root wrapper logs here
+USER_DAEMON_LOG = os.path.join(config._home(), ".codexpad.daemon.log")
+
+
+def _log_tail(path, lines=10):
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 8192))
+            return b"\n".join(fh.read().splitlines()[-lines:]) \
+                    .decode("utf-8", "replace")
+    except OSError:
+        return ""
 
 
 def start_daemon():
@@ -66,30 +80,43 @@ def start_daemon():
     Prefers the passwordless root wrapper installed by make_login_app.sh /
     install-login.sh when it exists — on Macs that need root + Input
     Monitoring together, that is the only spawn that works. Falls back to
-    plain python otherwise. On failure the daemon's own output — wired-mode
-    and Input Monitoring guidance — is returned so the UI can show it.
+    plain python otherwise. On failure the daemon's own words come back from
+    its log file so the UI can show them (a PIPE would deadlock the daemon
+    once full, and the wrapper redirects to its log anyway).
     """
     if daemon_running():
         return {"ok": 1, "note": "daemon already running"}
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if os.path.exists(WRAPPER_BIN):
         cmd = ["/usr/bin/sudo", "-n", WRAPPER_BIN]
+        log_path = DAEMON_LOG
+        sink = subprocess.DEVNULL                # the wrapper logs itself
     else:
-        cmd = [sys.executable, "-m", "codexpad.daemon"]
-    proc = subprocess.Popen(cmd,
-                            cwd=repo, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True)
+        cmd = [sys.executable, "-m", "codexpad.daemon", "--wait"]
+        log_path = USER_DAEMON_LOG
+        sink = open(log_path, "ab", buffering=0)
+    proc = subprocess.Popen(cmd, cwd=repo, stdout=sink, stderr=sink)
+    if sink is not subprocess.DEVNULL:
+        sink.close()                    # the child holds its own copy
     _daemon_proc[0] = proc
-    for _ in range(25):                 # up to ~2.5s
+    for _ in range(30):                 # up to ~3s
         time.sleep(0.1)
-        if proc.poll() is not None:     # it exited: report why, verbatim
-            out, _ = proc.communicate()
-            return {"error": (out or "").strip() or
-                             f"daemon exited with code {proc.returncode}"}
         if daemon_running():
             return {"ok": 1, "note": "daemon started"}
+        if proc.poll() is not None:
+            break
+    tail = _log_tail(log_path)
+    if proc.poll() is not None and cmd[0] == "/usr/bin/sudo":
+        return {"error": "the root wrapper exited straight away — the "
+                         "passwordless sudo rule is probably missing or "
+                         "stale. Re-run:  ./make_login_app.sh \"$(which "
+                         "python)\"\n" + (("\ndaemon log:\n" + tail) if tail
+                                          else "")}
+    if proc.poll() is not None:
+        return {"error": tail or f"daemon exited with code {proc.returncode}"}
     return {"error": "daemon is starting but its socket isn't answering yet — "
-                     "hit Re-check in a moment"}
+                     "hit Re-check in a moment" + (("\n\ndaemon log:\n" + tail)
+                                                   if tail else "")}
 
 
 def hook_status(path=None):
@@ -130,6 +157,14 @@ def doctor():
     result["app_version"] = VERSION
     result["service"] = (os.path.exists(SERVICE_PLIST)
                          if sys.platform == "darwin" else None)
+    # Codexpad.app in Login Items IS the run-at-login mechanism on the macOS
+    # path; when it's installed the LaunchAgent button must not be offered —
+    # a second spawner would only fight it over the pad.
+    result["login_app"] = (
+        os.path.exists(os.path.expanduser("~/Applications/Codexpad.app"))
+        or os.path.exists("/Applications/Codexpad.app")
+        if sys.platform == "darwin" else False)
+    result["wrapper"] = os.path.exists(WRAPPER_BIN)
     return result
 
 
@@ -173,6 +208,43 @@ def install_service():
                     "If keys stay dark after a reboot, grant Input Monitoring to "
                     + sys.executable + ". To remove: launchctl unload "
                     + SERVICE_PLIST}
+
+
+def event_pump():
+    """Mirror pad events into the user's login session, forever.
+
+    Long-polls the daemon's wait_event and runs the configured
+    mic_on_command / mic_off_command here — as the logged-in user, where
+    dictation shortcuts and AppleScript actually work. The (possibly root)
+    daemon never executes these. Quietly rides out daemon restarts and
+    daemons too old to know wait_event.
+    """
+    last = -1
+    while True:
+        r = ask_daemon({"cmd": "wait_event", "after": last, "timeout": 20})
+        if "error" in r:
+            last = -1                   # daemon gone; resync when it's back
+            time.sleep(3)
+            continue
+        if "seq" not in r:
+            time.sleep(15)              # daemon predates events
+            continue
+        last = r.get("seq", last)
+        events = r.get("events") or []
+        if not events:
+            continue
+        cfg = config.load()
+        for name in events:
+            cmd = {"MIC_ON": cfg.get("mic_on_command"),
+                   "MIC_OFF": cfg.get("mic_off_command")}.get(name)
+            if cmd:
+                try:
+                    subprocess.Popen(cmd, shell=True,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                    print(f"mic: {name} -> {cmd}", flush=True)
+                except Exception as exc:
+                    print(f"mic: {name} command failed: {exc}", flush=True)
 
 
 def run_install():
@@ -231,8 +303,16 @@ PAGE = """<!doctype html>
   input[type=color] { width: 2.6rem; height: 1.9rem; border: 1px solid var(--line);
                       border-radius: 8px; background: none; cursor: pointer; padding: 2px; }
   input[type=range] { width: 7rem; accent-color: var(--accent); }
-  select, textarea { background: #FBFAF7; color: var(--ink);
+  select, textarea, input[type=text] { background: #FBFAF7; color: var(--ink);
     border: 1px solid var(--line); border-radius: 10px; padding: .4rem .6rem; font: inherit; }
+  input[type=text] { width: 100%;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .84rem; }
+  /* ---- hardware status strip ---- */
+  #hw { display: none; border-radius: 12px; padding: .7rem 1rem; margin: 0 0 1rem;
+        font-size: .9rem; white-space: pre-wrap; }
+  #hw.ok   { display: block; background: #EAF3E6; border: 1px solid #C8DFBC; color: #3D6B2E; }
+  #hw.warn { display: block; background: #FDF3DC; border: 1px solid #EDDCB0; color: #7A5A16; }
+  #hw.bad  { display: block; background: #FBEFE9; border: 1px solid #E8C4B2; color: #8A3B22; }
   button { background: var(--card); color: var(--ink); border: 1px solid var(--line);
            border-radius: 999px; padding: .45rem 1.05rem; font: inherit;
            cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
@@ -307,6 +387,7 @@ it needs you, green when it's done.</p>
 
 <div class="card">
   <h2>Your pad, live</h2>
+  <div id="hw"></div>
   <div id="legend"></div>
   <div class="padwrap">
     <div class="pad" id="pad">
@@ -358,9 +439,18 @@ it needs you, green when it's done.</p>
 <div class="card">
   <h2>Mic &amp; bindings</h2>
   <p>Mic ring colour <input type="color" id="mic"></p>
-  <p class="hint">Shell commands by control — AG00–AG05, ACT06–ACT09,
-  ACT12, ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF. Saved with
-  the button above.</p>
+  <p class="hint">When the mic bar opens or closes, this app runs these in
+  <b>your login session</b> — so dictation shortcuts, AppleScript and
+  Raycast all work. macOS dictation example (needs the double-Fn shortcut
+  enabled, and Accessibility for this app):
+  <code>osascript -e 'tell application "System Events" to key code 63' -e 'tell application "System Events" to key code 63'</code></p>
+  <label class="hint">mic opens →
+    <input type="text" id="micon" placeholder="command run when the mic opens"></label>
+  <label class="hint" style="display:block;margin-top:.4rem">mic closes →
+    <input type="text" id="micoff" placeholder="command run when the mic closes"></label>
+  <p class="hint" style="margin-top:1rem">Shell commands by control — AG00–AG05,
+  ACT06–ACT09, ACT12, ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF
+  (these run from the daemon, dropped to your user). Saved with the button above.</p>
   <textarea id="commands" rows="5"></textarea>
 </div>
 
@@ -370,7 +460,7 @@ it needs you, green when it's done.</p>
   <div class="row">
     <button onclick="startDaemon()">▶ Start daemon</button>
     <button class="primary" onclick="install()">Install hooks</button>
-    <button class="primary" onclick="service()">Run at login</button>
+    <button class="primary" id="svcbtn" onclick="service()">Run at login</button>
     <button onclick="refreshDoctor()">↻ Re-check</button>
   </div>
   <div id="installout"></div>
@@ -484,7 +574,10 @@ async function save() {
   try { commands = JSON.parse($("#commands").value || "{}"); }
   catch (e) { return say("commands isn't valid JSON: " + e.message); }
   const body = { states, commands,
-                 mic_color: $("#mic").value.slice(1).toUpperCase(), port: cfg.port };
+                 mic_color: $("#mic").value.slice(1).toUpperCase(),
+                 mic_on_command: $("#micon").value.trim(),
+                 mic_off_command: $("#micoff").value.trim(),
+                 port: cfg.port };
   const r = await api("/api/config", body);
   say(r.error ? "saved, but: " + r.error : "saved — daemon reloaded ✓");
   legend();
@@ -535,8 +628,37 @@ function paintPad(status) {
   $("#handoff").textContent = padPaused ? "⇤ Take pad back" : "⇆ Hand pad to Codex";
   $("#pad").style.opacity = padPaused ? .45 : 1;
 }
+function hw(cls, msg) {
+  const el = $("#hw");
+  el.className = cls || "";
+  el.textContent = msg || "";
+}
+function paintHw(s) {
+  if (s.error) {
+    hw("bad", "● daemon not reachable — " + s.error +
+       "\\nStart it below, or open Codexpad.app (opening the app is always the fix).");
+    return;
+  }
+  const d = s.device || {connected: true};
+  if (d.connected) {
+    if (s.paused) hw("warn", "● pad handed to Codex — take it back below when you want Claude states again.");
+    else hw("ok", "● daemon running · pad connected — buttons below act on the real pad.");
+  } else if (d.seen) {
+    hw("bad", "● daemon running, pad on USB, but macOS blocks opening it — Input Monitoring.\\n" +
+       "Fix: System Settings → Privacy & Security → Input Monitoring → REMOVE the old " +
+       "Codexpad row (a rebuild voids the grant), re-add ~/Applications/Codexpad.app, " +
+       "toggle ON, then reopen the app." + (d.error ? "\\n(" + d.error + ")" : ""));
+  } else if (d.seen === false) {
+    hw("bad", "● daemon running but the pad isn't on USB.\\n" +
+       "Fix: data-capable cable, quit the ChatGPT app, and put the pad in wired mode — " +
+       "hold the front-left touch key 3s, tap until the underglow turns white.");
+  } else {
+    hw("warn", "● daemon running — still probing USB for the pad…");
+  }
+}
 async function pollStatus() {
   const s = await api("/api/status");
+  paintHw(s);
   if (!s.error) { paintPad(s); }
   setTimeout(pollStatus, 2500);
 }
@@ -580,6 +702,8 @@ async function refreshDoctor(keepBanner) {
   const d = await api("/api/doctor");
   if (d.error) return;
   const hookCount = Object.values(d.hooks.events).filter(Boolean).length;
+  const atLogin = d.login_app ? true : (d.service === null ? null : d.service);
+  $("#svcbtn").style.display = d.login_app ? "none" : "";
   $("#checks").innerHTML =
     checkItem(d.hidapi, "hidapi installed", "pip install hidapi") +
     checkItem(d.device, "Codex Micro on USB",
@@ -587,9 +711,11 @@ async function refreshDoctor(keepBanner) {
     checkItem(d.daemon, "daemon running", "use ▶ Start daemon below") +
     checkItem(hookCount === 6, `Claude Code hooks (${hookCount}/6) in ${d.hooks.path}`,
               "click Install hooks, then fully restart Claude Code") +
-    checkItem(d.service === null ? null : d.service,
-              "daemon runs at login (no terminal needed)",
-              d.service === null ? "macOS only for now" : "click Run at login");
+    checkItem(atLogin,
+              d.login_app ? "starts at login via Codexpad.app (keep it in Login Items)"
+                          : "daemon runs at login (no terminal needed)",
+              d.service === null ? "macOS only for now"
+                                 : "click Run at login — or better, build Codexpad.app: ./make_login_app.sh");
   if (d.daemon && d.daemon_version !== d.app_version) {
     banner("Mixed builds: the running daemon is " +
       (d.daemon_version || "an older build") + " but this app is " + d.app_version +
@@ -628,6 +754,8 @@ $("#trim").onchange = async () => {
     if (name !== "off") $("#states").appendChild(row(name, spec));
   }
   $("#mic").value = "#" + cfg.mic_color;
+  $("#micon").value = cfg.mic_on_command || "";
+  $("#micoff").value = cfg.mic_off_command || "";
   $("#commands").value = JSON.stringify(cfg.commands, null, 2);
   $("#cfgpath").textContent = cfg.config_path || "~/.codexpad.json";
   $("#presets").innerHTML = Object.keys(PRESETS)
@@ -715,6 +843,8 @@ def main():
         result = start_daemon()
         print("daemon: " + (result.get("note") or result.get("error", "started")),
               flush=True)
+
+    threading.Thread(target=event_pump, daemon=True).start()
 
     port = config.load().get("port", config.PORT)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
