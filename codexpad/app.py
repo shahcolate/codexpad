@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""codexpad app - a local web UI for colours, setup and party mode.
+"""codexpad app - the control panel for Codex Micro × Claude Code.
 
-    python -m codexpad.app          # then open http://127.0.0.1:8378
+    python -m codexpad              # starts the daemon too, then serves
+                                    # http://127.0.0.1:8378
 
-Launches the daemon too, if one isn't already running (skip with
---no-daemon). A live mockup of the pad showing what each Agent Key is doing,
-colour pickers and effect menus for every state with preview on any key,
-theme presets, a master brightness slider, mic ring colour, command bindings,
-the rainbow button, and a Setup card that checks hidapi / device / daemon /
-hooks, can install the Claude Code hooks (runs install.sh), and can start the
-daemon.
+Launches the daemon if one isn't already running (skip with --no-daemon).
+A live mockup of the pad showing what each Agent Key is doing, colour pickers
+and effect menus for every state with preview on any key, theme presets, a
+master brightness slider, mic ring colour, command bindings, the rainbow
+button, and a Setup card that checks hidapi / device / daemon / hooks, can
+install the Claude Code hooks (runs install.sh), and can start the daemon.
 
 Stdlib only. Binds to 127.0.0.1 only — command bindings are shell commands
 run by the daemon and the install button writes ~/.claude/settings.json, so
@@ -44,7 +44,7 @@ def ask_daemon(payload):
         return {"error": f"daemon not running ({exc})"}
     if not raw.strip():
         return {"error": "daemon gave no reply — it predates app commands; "
-                         "restart it (git pull, then python -m codexpad.daemon)"}
+                         "restart it (git pull, then python -m codexpad)"}
     try:
         return json.loads(raw)
     except Exception:
@@ -119,7 +119,50 @@ def doctor():
     result["daemon"] = "error" not in ping
     result["daemon_version"] = ping.get("v")
     result["app_version"] = VERSION
+    result["service"] = (os.path.exists(SERVICE_PLIST)
+                         if sys.platform == "darwin" else None)
     return result
+
+
+SERVICE_PLIST = os.path.expanduser(
+    "~/Library/LaunchAgents/com.codexpad.daemon.plist")
+
+
+def install_service():
+    """Install a launchd agent: the daemon runs at login, no terminal needed."""
+    if sys.platform != "darwin":
+        return {"error": "background service install is macOS-only for now"}
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.makedirs(os.path.dirname(SERVICE_PLIST), exist_ok=True)
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.codexpad.daemon</string>
+  <key>ProgramArguments</key><array>
+    <string>{python}</string><string>-m</string><string>codexpad.daemon</string>
+  </array>
+  <key>WorkingDirectory</key><string>{repo}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/codexpad.daemon.log</string>
+  <key>StandardErrorPath</key><string>/tmp/codexpad.daemon.log</string>
+</dict></plist>
+""".format(python=sys.executable, repo=repo)
+    with open(SERVICE_PLIST, "w") as fh:
+        fh.write(xml)
+    subprocess.run(["launchctl", "unload", SERVICE_PLIST], capture_output=True)
+    proc = subprocess.run(["launchctl", "load", SERVICE_PLIST],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        return {"error": "launchctl load failed: "
+                         + (proc.stderr or proc.stdout).strip()}
+    return {"ok": 1, "plist": SERVICE_PLIST,
+            "note": "Installed. The daemon now starts at login and restarts if "
+                    "it dies — no terminal needed (log: /tmp/codexpad.daemon.log). "
+                    "If keys stay dark after a reboot, grant Input Monitoring to "
+                    + sys.executable + ". To remove: launchctl unload "
+                    + SERVICE_PLIST}
 
 
 def run_install():
@@ -140,87 +183,121 @@ def run_install():
 PAGE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>codexpad</title>
+<title>codexpad — Codex Micro × Claude Code</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: light;
+    --bg: #F5F3EC; --card: #FFFFFF; --line: #E4E0D4;
+    --ink: #1F1E1B; --muted: #7A7468; --faint: #A39D90;
+    --accent: #C96442; --accent-soft: #F6E5DD;
+    --pad: #ECE9E0; --pad-line: #DCD8CB; --key: #FDFCFA;
+  }
   * { box-sizing: border-box; }
-  body { font: 15px/1.5 -apple-system, system-ui, "Segoe UI", sans-serif;
-         background: #0d1117; color: #e6edf3; max-width: 760px;
-         margin: 1.5rem auto 4rem; padding: 0 1rem; }
-  h1 { font-size: 1.5rem; margin: 0;
-       background: linear-gradient(90deg, #7ee8fa, #eec0c6);
-       -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .sub { color: #8b949e; margin: .2rem 0 1rem; }
-  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px;
-          padding: 1.1rem 1.2rem; margin: 1rem 0;
-          box-shadow: 0 4px 24px rgba(0,0,0,.35); }
-  .card h2 { font-size: 1.05rem; margin: 0 0 .8rem; color: #c9d1d9; }
-  #banner { display: none; background: #3d1d1d; border: 1px solid #6e2c2c;
-            color: #ffb4b4; border-radius: 10px; padding: .6rem .9rem; margin: .8rem 0;
-            white-space: pre-wrap; }
-  #banner button { margin-top: .5rem; display: block; }
-  #toast { min-height: 1.3rem; color: #8b949e; margin: .6rem 0; }
+  body { font: 15.5px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--ink);
+         max-width: 780px; margin: 0 auto 5rem; padding: 2.5rem 1.25rem 0; }
+  .eyebrow { font-size: .7rem; letter-spacing: .16em; text-transform: uppercase;
+             color: var(--muted); margin: 0 0 .6rem; }
+  h1 { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+       font-weight: 500; font-size: 2.4rem; letter-spacing: -.01em;
+       margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; }
+  h2 { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+       font-weight: 500; font-size: 1.35rem; margin: 0 0 1rem; }
+  .card { background: var(--card); border: 1px solid var(--line);
+          border-radius: 16px; padding: 1.5rem 1.6rem; margin: 1.1rem 0; }
+  #banner { display: none; background: #FBEFE9; border: 1px solid #E8C4B2;
+            color: #8A3B22; border-radius: 12px; padding: .85rem 1.1rem;
+            margin: 1rem 0; white-space: pre-wrap; font-size: .9rem; }
+  #banner button { margin-top: .6rem; display: block; }
+  #banner a { display: block; margin-top: .5rem; color: var(--accent); }
+  #toast { min-height: 1.4rem; color: var(--muted); font-size: .9rem;
+           margin: .6rem 0 0; }
   table { border-collapse: collapse; width: 100%; }
-  td, th { padding: .4rem .5rem; text-align: left; border-bottom: 1px solid #21262d; }
-  th { color: #8b949e; font-weight: 600; font-size: .8rem; text-transform: uppercase; }
-  input[type=color] { width: 2.8rem; height: 2rem; border: none; background: none;
-                      cursor: pointer; padding: 0; }
-  input[type=range] { width: 7rem; accent-color: #7ee8fa; }
-  select, button, textarea { background: #21262d; color: #e6edf3;
-    border: 1px solid #30363d; border-radius: 8px; padding: .35rem .6rem; font: inherit; }
-  button { cursor: pointer; transition: border-color .15s, transform .05s; }
-  button:hover { border-color: #7ee8fa; }
+  td, th { padding: .5rem .5rem; text-align: left; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: none; }
+  th { color: var(--faint); font-weight: 600; font-size: .72rem;
+       letter-spacing: .1em; text-transform: uppercase; }
+  input[type=color] { width: 2.6rem; height: 1.9rem; border: 1px solid var(--line);
+                      border-radius: 8px; background: none; cursor: pointer; padding: 2px; }
+  input[type=range] { width: 7rem; accent-color: var(--accent); }
+  select, textarea { background: #FBFAF7; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 10px; padding: .4rem .6rem; font: inherit; }
+  button { background: var(--card); color: var(--ink); border: 1px solid var(--line);
+           border-radius: 999px; padding: .45rem 1.05rem; font: inherit;
+           cursor: pointer; transition: border-color .15s, background .15s, transform .05s; }
+  button:hover { border-color: var(--accent); color: var(--accent); }
   button:active { transform: scale(.97); }
-  .big { font-size: 1rem; padding: .5rem 1rem; margin: 0 .4rem .4rem 0; }
-  textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, monospace;
-             font-size: .85rem; }
-  .hint { color: #6e7681; font-size: .85rem; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { background: #B4552F; color: #fff; }
+  .row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+  textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+             font-size: .84rem; }
+  .hint { color: var(--muted); font-size: .86rem; }
+  code { background: #EFECE2; border-radius: 6px; padding: .1em .4em;
+         font-size: .85em; }
+  /* ---- state legend ---- */
+  #legend { display: flex; flex-wrap: wrap; gap: 1rem .5rem; margin: .2rem 0 1.2rem; }
+  #legend .chip { display: flex; align-items: center; gap: .45rem;
+                  font-size: .85rem; color: var(--muted); }
+  #legend .dot { width: 1.5rem; height: 1.5rem; border-radius: 6px;
+                 border: 1px solid rgba(0,0,0,.12); }
   /* ---- the pad mockup ---- */
-  .padwrap { display: flex; gap: 1.4rem; flex-wrap: wrap; align-items: center; }
-  .pad { background: #1c2128; border: 1px solid #2d333b; border-radius: 20px;
-         padding: 16px; display: grid; grid-template-columns: repeat(4, 58px);
-         gap: 10px; transition: box-shadow .3s; }
-  .pad.miclive { box-shadow: 0 0 24px 4px rgba(255, 60, 60, .55); }
-  .pad > div { height: 58px; border-radius: 12px; background: #2a3038;
+  .padwrap { display: flex; gap: 1.6rem; flex-wrap: wrap; align-items: center; }
+  .pad { background: var(--pad); border: 1px solid var(--pad-line);
+         border-radius: 22px; padding: 15px;
+         display: grid; grid-template-columns: repeat(4, 56px); gap: 10px;
+         transition: box-shadow .3s; }
+  .pad.miclive { box-shadow: 0 0 22px 3px rgba(217, 90, 60, .45); }
+  .pad > div { height: 56px; border-radius: 12px; background: var(--key);
+               border: 1px solid var(--pad-line);
                display: flex; align-items: center; justify-content: center;
-               font-size: 1.05rem; color: #768390; user-select: none; }
-  .key { cursor: pointer; border: 2px solid transparent;
-         box-shadow: inset 0 0 14px 2px var(--glow, transparent);
+               font-size: 1rem; color: var(--faint); user-select: none; }
+  .key { cursor: pointer; box-shadow: inset 0 0 13px 2px var(--glow, transparent);
          transition: box-shadow .25s, border-color .15s; }
-  .key.sel { border-color: #7ee8fa; }
-  .key .n { font-size: .65rem; color: #a3aab3; }
-  .knob { border-radius: 50% !important; background: #3a414a !important; }
-  .stick { border-radius: 50% !important; background: #14171c !important; }
+  .key.sel { border-color: var(--accent); border-width: 2px; }
+  .key .n { font-size: .62rem; color: var(--muted); }
+  .knob { border-radius: 50% !important; background: #E3E0D6 !important; }
+  .stick { border-radius: 50% !important; background: #33312D !important; color: #8B857B !important; }
   .micbar { grid-column: span 2; }
-  .micbar.on { background: #4a1f1f; color: #ffb4b4; }
-  .touch { border-radius: 50% !important; background: #14171c !important;
-           transform: scale(.55); }
-  @keyframes breath { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .micbar.on { background: #F8E0D6; border-color: #E8B49E; color: #B4552F; }
+  .touch { border-radius: 50% !important; background: #33312D !important;
+           transform: scale(.5); }
+  @keyframes breath { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
   @keyframes hue { to { filter: hue-rotate(360deg) } }
   .fx-breath { animation: breath 2.4s ease-in-out infinite; }
   .fx-rainbow { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red) !important;
                 animation: hue 3s linear infinite; }
-  .padside { flex: 1; min-width: 210px; }
-  .padside label { display: block; color: #8b949e; font-size: .85rem; margin-top: .7rem; }
-  .swatches button { margin: 0 .35rem .35rem 0; }
-  .check { list-style: none; padding: 0; margin: .4rem 0; }
-  .check li { padding: .15rem 0; }
+  .padside { flex: 1; min-width: 215px; }
+  .padside label { display: block; color: var(--muted); font-size: .86rem;
+                   margin-top: .8rem; }
+  .swatches { margin-bottom: .8rem; }
+  .swatches button { margin: 0 .35rem .35rem 0; font-size: .88rem;
+                     padding: .35rem .9rem; }
+  .check { list-style: none; padding: 0; margin: .2rem 0 .4rem; }
+  .check li { padding: .18rem 0; }
   .check .ok::before  { content: "✅ "; }
   .check .bad::before { content: "❌ "; }
   .check .meh::before { content: "⚠️ "; }
-  #installout { display: none; background: #0d1117; border-radius: 8px;
-                padding: .6rem .8rem; white-space: pre-wrap;
-                font: .8rem ui-monospace, monospace; margin-top: .6rem; }
-  details { margin-top: .8rem; } summary { cursor: pointer; color: #8b949e; }
+  #installout { display: none; background: #F2F0E8; border-radius: 10px;
+                padding: .7rem .9rem; white-space: pre-wrap;
+                font: .8rem ui-monospace, Menlo, monospace; margin-top: .7rem; }
+  details { margin-top: .9rem; }
+  summary { cursor: pointer; color: var(--muted); }
+  footer { color: var(--faint); font-size: .8rem; margin-top: 2.5rem;
+           text-align: center; }
+  footer a { color: var(--muted); }
 </style>
 
-<h1>🎛️ codexpad</h1>
-<p class="sub">Codex Micro × Claude Code — colours, buttons, setup.</p>
+<p class="eyebrow">Codex Micro × Claude Code</p>
+<h1>codexpad</h1>
+<p class="sub">Your sessions, in colour — blue while Claude works, amber when
+it needs you, green when it's done.</p>
 <div id="banner"></div>
-<div id="toast">loading…</div>
 
 <div class="card">
   <h2>Your pad, live</h2>
+  <div id="legend"></div>
   <div class="padwrap">
     <div class="pad" id="pad">
       <div class="knob" title="dial — brightness / acknowledge">◉</div>
@@ -245,13 +322,15 @@ PAGE = """<!doctype html>
       <label>Master brightness <span id="trimval"></span>
         <input type="range" id="trim" min="0.1" max="1" step="0.1"></label>
       <label>Mic: <b id="micstate">–</b></label>
-      <p style="margin-top:.9rem">
-        <button class="big" onclick="party()">🌈 Rainbow</button>
-        <button class="big" onclick="demo()">▶ Demo</button>
-        <button class="big" onclick="off()">⏻ Off</button>
-      </p>
+      <div class="row">
+        <button onclick="party()">🌈 Rainbow</button>
+        <button onclick="demo()">▶ Demo</button>
+        <button onclick="off()">⏻ Off</button>
+        <button id="handoff" onclick="handoff()">⇆ Hand pad to Codex</button>
+      </div>
     </div>
   </div>
+  <div id="toast">loading…</div>
 </div>
 
 <div class="card">
@@ -260,26 +339,30 @@ PAGE = """<!doctype html>
   <table id="states">
     <tr><th>State</th><th>Colour</th><th>Effect</th><th>Brightness</th><th></th></tr>
   </table>
-  <p><button class="big" onclick="save()">💾 Save &amp; apply</button>
-     <span class="hint">writes <code id="cfgpath"></code>, daemon reloads live</span></p>
+  <div class="row">
+    <button class="primary" onclick="save()">Save &amp; apply</button>
+  </div>
+  <p class="hint">Writes <code id="cfgpath"></code> — the daemon reloads it live.</p>
 </div>
 
 <div class="card">
   <h2>Mic &amp; bindings</h2>
   <p>Mic ring colour <input type="color" id="mic"></p>
-  <p class="hint">Shell commands by control — AG00–AG05, ACT06–ACT09, ACT12,
-  ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF. Saved with the button above.</p>
+  <p class="hint">Shell commands by control — AG00–AG05, ACT06–ACT09,
+  ACT12, ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF. Saved with
+  the button above.</p>
   <textarea id="commands" rows="5"></textarea>
 </div>
 
 <div class="card">
   <h2>Claude Code setup</h2>
   <ul class="check" id="checks"></ul>
-  <p>
-    <button class="big" onclick="startDaemon()">▶ Start daemon</button>
-    <button class="big" onclick="install()">⚙️ Install hooks</button>
-    <button class="big" onclick="refreshDoctor()">↻ Re-check</button>
-  </p>
+  <div class="row">
+    <button onclick="startDaemon()">▶ Start daemon</button>
+    <button class="primary" onclick="install()">Install hooks</button>
+    <button class="primary" onclick="service()">Run at login</button>
+    <button onclick="refreshDoctor()">↻ Re-check</button>
+  </div>
   <div id="installout"></div>
   <details>
     <summary>Manual steps &amp; gotchas</summary>
@@ -288,7 +371,6 @@ PAGE = """<!doctype html>
           tap past the three BLE channels until the underglow turns white.</li>
       <li>macOS: grant <b>Input Monitoring</b> to your terminal, then fully quit
           and relaunch it (<code>sudo</code> works as a stopgap).</li>
-      <li>Run the daemon: <code>python -m codexpad.daemon</code> and leave it running.</li>
       <li>Install hooks (button above, or <code>./install.sh</code>), then
           <b>fully quit and reopen Claude Code</b> — it only reads settings at launch.</li>
       <li>Desktop app: use the <b>Code</b> tab with a <b>Local</b> environment.
@@ -296,6 +378,9 @@ PAGE = """<!doctype html>
     </ol>
   </details>
 </div>
+
+<footer>Unofficial, unaffiliated, MIT. Every protocol claim is status-tagged
+in <a href="https://github.com/shahcolate/codex-micro-for-claude/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</footer>
 
 <script>
 const EFFECTS = {0:"off",1:"solid",2:"snake",3:"rainbow",4:"breath",5:"gradient",6:"shallow breath"};
@@ -340,15 +425,36 @@ function tableSpec(name) {
   const s = cfg && cfg.states[name];
   return s || {color: "000000", effect: 0, brightness: 0};
 }
+function legend() {
+  $("#legend").innerHTML = ["idle", "working", "blocked", "done", "error"]
+    .map(n => `<span class="chip"><span class="dot"
+      style="background:#${tableSpec(n).color}"></span>${n}</span>`).join("");
+}
 async function tryRow(name, tr) {
   const r = await api("/api/preview", {slot: selSlot, ...specOf(tr)});
   say(r.error || `AG0${selSlot} → ${name}`);
+  legend();
 }
 async function party() {
   const r = await api("/api/rainbow", {});
   say(r.error || "🌈 press the dial to end the party");
 }
 async function off() { const r = await api("/api/off", {}); say(r.error || "all off"); }
+let padPaused = false;
+async function handoff() {
+  const r = await api(padPaused ? "/api/resume" : "/api/pause", {});
+  say(r.error || (padPaused ? "pad is yours again — Claude states repainted"
+                            : "pad handed to Codex — open the ChatGPT app; lights are theirs"));
+}
+async function service() {
+  say("installing background service…");
+  const r = await api("/api/service/install", {});
+  const out = $("#installout");
+  out.style.display = "block";
+  out.textContent = r.error || r.note || "installed";
+  say(r.error ? "service install failed" : "daemon now runs at login — no terminal needed");
+  refreshDoctor();
+}
 async function demo() {
   say("demo: cycling states on AG0" + selSlot);
   for (const name of ["idle", "working", "blocked", "done", "error"]) {
@@ -371,6 +477,7 @@ async function save() {
                  mic_color: $("#mic").value.slice(1).toUpperCase(), port: cfg.port };
   const r = await api("/api/config", body);
   say(r.error ? "saved, but: " + r.error : "saved — daemon reloaded ✓");
+  legend();
 }
 function applyPreset(name) {
   for (const [state, [c, e, b]] of Object.entries(PRESETS[name])) {
@@ -380,6 +487,7 @@ function applyPreset(name) {
     tr.querySelector("[data-k=effect]").value = e;
     tr.querySelector("[data-k=brightness]").value = b;
   }
+  legend();
   say(`${name} preset loaded — Try a row, then Save & apply`);
 }
 function paintPad(status) {
@@ -398,8 +506,8 @@ function paintPad(status) {
       el.style.setProperty("--glow", "transparent");
     } else {
       el.style.setProperty("--glow", `#${spec.color}`);
-      el.style.background = `#${spec.color}2e`;   // colour tint under the glow
-      el.style.opacity = Math.max(spec.brightness, .3);
+      el.style.background = `#${spec.color}30`;
+      el.style.opacity = Math.max(spec.brightness, .35);
       if (spec.effect === 4 || spec.effect === 6) el.classList.add("fx-breath");
     }
     el.title = s.cwd ? `${s.state} — ${s.cwd}` : s.state;
@@ -413,10 +521,13 @@ function paintPad(status) {
     $("#trim").value = status.trim;
     $("#trimval").textContent = Math.round(status.trim * 100) + "%";
   }
+  padPaused = !!status.paused;
+  $("#handoff").textContent = padPaused ? "⇤ Take pad back" : "⇆ Hand pad to Codex";
+  $("#pad").style.opacity = padPaused ? .45 : 1;
 }
 async function pollStatus() {
   const s = await api("/api/status");
-  if (!s.error) { paintPad(s); banner(null); }
+  if (!s.error) { paintPad(s); }
   setTimeout(pollStatus, 2500);
 }
 function banner(msg, offerStart) {
@@ -441,10 +552,9 @@ async function startDaemon() {
       const a = document.createElement("a");
       a.href = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
       a.textContent = "Open Input Monitoring settings";
-      a.style.cssText = "display:block;margin-top:.5rem;color:#7ee8fa";
       $("#banner").appendChild(a);
     }
-    say("daemon didn't start — the red box says why");
+    say("daemon didn't start — the notice above says why");
     refreshDoctor(true);            // update checklist, keep this banner
   } else {
     say(r.note || "daemon started");
@@ -466,7 +576,10 @@ async function refreshDoctor(keepBanner) {
               "wired mode: hold the touch control 3s, tap past BLE until white") +
     checkItem(d.daemon, "daemon running", "use ▶ Start daemon below") +
     checkItem(hookCount === 6, `Claude Code hooks (${hookCount}/6) in ${d.hooks.path}`,
-              "click Install hooks, then fully restart Claude Code");
+              "click Install hooks, then fully restart Claude Code") +
+    checkItem(d.service === null ? null : d.service,
+              "daemon runs at login (no terminal needed)",
+              d.service === null ? "macOS only for now" : "click Run at login");
   if (d.daemon && d.daemon_version !== d.app_version) {
     banner("Mixed builds: the running daemon is " +
       (d.daemon_version || "an older build") + " but this app is " + d.app_version +
@@ -510,6 +623,7 @@ $("#trim").onchange = async () => {
   $("#presets").innerHTML = Object.keys(PRESETS)
     .map(n => `<button onclick="applyPreset('${n}')">${n}</button>`).join("");
   document.querySelector('.key[data-slot="0"]').classList.add("sel");
+  legend();
   say("ready");
   refreshDoctor();
   pollStatus();
@@ -571,6 +685,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(run_install())
         elif self.path == "/api/daemon/start":
             self._send(start_daemon())
+        elif self.path == "/api/service/install":
+            self._send(install_service())
+        elif self.path == "/api/pause":
+            self._send(ask_daemon({"cmd": "pause"}))
+        elif self.path == "/api/resume":
+            self._send(ask_daemon({"cmd": "resume"}))
         else:
             self._send({"error": "not found"}, 404)
 

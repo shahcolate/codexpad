@@ -102,6 +102,7 @@ load_config()
 _seq = [0]
 _trim = [1.0]                 # global brightness trim, dial-adjustable 0.1-1.0
 _stick = [None]               # flick currently held, so one push fires once
+_paused = [False]             # True: the vendor client owns the pad
 _lock = threading.RLock()     # serialises HID writes and the slot tables
 
 
@@ -318,6 +319,8 @@ def mic_event(handle, key, act):
 
 def dispatch(handle, msg):
     """Turn one device notification into an action (PROTOCOL.md §4.1)."""
+    if _paused[0]:
+        return          # vendor client owns the pad; stay silent
     params = msg.get("p") or {}
     if msg.get("m") == "v.oai.rad":
         flick(params.get("a") or 0, params.get("d") or 0)
@@ -436,7 +439,7 @@ def handle_request(handle, req):
         elif cmd == "status":
             with _lock:
                 by_slot = {s: c for c, s in _slots.items()}
-                return {"ok": 1, "trim": _trim[0],
+                return {"ok": 1, "trim": _trim[0], "paused": _paused[0],
                         "mic": {"open": _mic["open"], "latched": _mic["latched"]},
                         "slots": [{"slot": i,
                                    "state": _slot_state.get(i) or "off",
@@ -450,6 +453,25 @@ def handle_request(handle, req):
             print(f"  trim    {int(_trim[0] * 100)}% (app)", flush=True)
             for slot, state in lit:
                 set_slot(handle, slot, state)
+        elif cmd == "pause":
+            # hand the pad to the vendor client: blank our lights, go quiet,
+            # but keep tracking session states so resume can repaint them
+            with _lock:
+                snapshot = dict(_slot_state)
+            blank_all(handle)
+            with _lock:
+                _slot_state.clear()
+                _slot_state.update(snapshot)
+                _paused[0] = True
+            print("  pause   pad handed to the vendor client", flush=True)
+        elif cmd == "resume":
+            with _lock:
+                _paused[0] = False
+                lit = [(s, st) for s, st in _slot_state.items()
+                       if st and st != "off"]
+            for slot, state in lit:
+                set_slot(handle, slot, state)
+            print("  resume  pad is ours again", flush=True)
         elif cmd == "reload":
             load_config()
             with _lock:
@@ -483,11 +505,19 @@ def handle_request(handle, req):
     if state == "end":
         slot = release(cwd)
         if slot is not None:
-            set_slot(handle, slot, "off")
+            if _paused[0]:
+                with _lock:
+                    _slot_state[slot] = "off"
+            else:
+                set_slot(handle, slot, "off")
             print(f"  {'end':<7} slot={slot} {cwd}", flush=True)
     elif state in STATES:
         slot = slot_for(cwd)
-        set_slot(handle, slot, state)
+        if _paused[0]:
+            with _lock:
+                _slot_state[slot] = state   # track silently; resume repaints
+        else:
+            set_slot(handle, slot, state)
         print(f"  {state:<7} slot={slot} {cwd}", flush=True)
     else:
         print(f"  ?? unknown state {state!r}", flush=True)

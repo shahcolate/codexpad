@@ -1,22 +1,35 @@
+<div align="center">
+
 # codexpad
 
 **Drive OpenAI's Codex Micro macropad from Claude Code.**
 
-The Codex Micro's six frosted Agent Keys light up to show what your Codex chats
-are doing. This makes them do the same for Claude Code sessions: blue while
-Claude works, amber when it's blocked on your approval, green when a turn
-finishes.
+Blue while Claude works · amber when it needs you · green when it's done
 
-Includes [`PROTOCOL.md`](PROTOCOL.md) — documentation of the device's vendor HID
-protocol, derived from observing the hardware. As far as I know it's the first
-public description of it.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-lightgrey)
+[![Protocol](https://img.shields.io/badge/protocol-documented%20%26%20verified-C96442)](PROTOCOL.md)
 
-> Unofficial and unaffiliated. Not endorsed by OpenAI or Work Louder.
-> Written against firmware `v0.4.1`; a firmware update may break any of it.
+<img src="docs/demo.gif" width="720" alt="The codexpad control panel mirroring live session states on the pad"><br>
+<sub>The control panel mirroring a working session, a blocked approval, a finished run, the mic opening, and rainbow mode.</sub>
+
+</div>
 
 ---
 
-## What you get
+The [Codex Micro](https://openai.com/supply/co-lab/work-louder/)'s six frosted
+Agent Keys light up to show what your Codex chats are doing. **codexpad makes
+them do the same for Claude Code sessions** — and documents the device's
+vendor HID protocol along the way, in what is (as far as we know) its first
+public description: [`PROTOCOL.md`](PROTOCOL.md), with a hardware-verification
+status on every claim and the raw captures to back them in
+[`captures/notifications.md`](captures/notifications.md).
+
+> Unofficial and unaffiliated — not endorsed by OpenAI or Work Louder.
+> Written against firmware `v0.4.1`; a firmware update may break any of it.
+
+## What lights up when
 
 | Claude Code event | Agent Key |
 |---|---|
@@ -27,121 +40,147 @@ public description of it.
 | Turn fails on an API error | red |
 | Session ends | off |
 
-Each session gets its own key. Desktop gives every session an isolated git
-worktree, so the working directory is a stable per-session identity — which is
-what makes the mapping work without any session bookkeeping.
-
-The amber is the one that earns the hardware. Everything else is decoration.
-
-The keys press back, too: a green or red key acknowledges its session, and the
-dial trims brightness — see [The buttons](#the-buttons).
-
----
-
-## Requirements
-
-- Codex Micro, **in wired mode** (see below)
-- macOS or Linux, Python 3.9+
-- `pip install hidapi`
-- Claude Code CLI or the Desktop app's **Code** tab
-
-### Put the device in wired mode
-
-In BLE mode, plugging in USB charges the device without enumerating it, so the
-protocol is unreachable. To switch:
-
-1. Hold the front-left touch control for 3 seconds — underglow turns **blue**
-2. Tap to cycle BLE channels 1, 2, 3
-3. A fourth tap selects **wired** — underglow turns **white**
-
-Confirm with `python tools/probe.py enumerate`.
-
----
+Each session gets its own key, identified by its working directory — Desktop
+gives every session an isolated worktree, so the mapping needs no bookkeeping.
+A seventh session evicts the least recently used. The amber is the one that
+earns the hardware; everything else is decoration.
 
 ## Quickstart
 
 ```bash
 git clone https://github.com/shahcolate/codex-micro-for-claude && cd codex-micro-for-claude
 pip install -r requirements.txt
-python -m codexpad.app               # starts the daemon too — open http://127.0.0.1:8378
+python -m codexpad
 ```
 
-The app's **Claude Code setup** card walks you through the rest: it checks
-device, daemon and hooks, and the **⚙️ Install hooks** button does the settings
-merge for you. Then fully quit and reopen Claude Code and send a prompt.
+That one command starts the daemon and opens the control panel at
+**http://127.0.0.1:8378**. Its setup card walks you through the rest with
+buttons, not instructions:
 
-Prefer the terminal? The pieces run separately (`--no-daemon` stops the app
-auto-starting one):
+1. **Wired mode** — hold the pad's front-left touch control 3s, tap past the
+   three BLE channels until the underglow turns white.
+2. **Input Monitoring** (macOS, one time) — grant it to your terminal, then
+   fully quit and relaunch the terminal. The pad exposes a keyboard
+   collection, so macOS gates opening it.
+3. Click **Install hooks**, then fully quit and reopen Claude Code.
+4. Click **Run at login** — the daemon becomes a background service that
+   starts at boot and restarts if it dies. **No terminal needs to stay open.**
 
-```bash
-python tools/probe.py enumerate      # device should appear
-python -m codexpad.daemon --test     # key 0 cycles through all five states
-./install.sh                         # merges hooks into ~/.claude/settings.json
-python -m codexpad.daemon            # leave this running
+Send Claude a prompt. The key turns blue.
+
+<div align="center">
+<img src="docs/app.png" width="680" alt="The full codexpad control panel">
+</div>
+
+## The control panel
+
+`python -m codexpad` serves a local-only page with:
+
+- **Your pad, live** — a mockup mirroring the hardware in real time: which
+  session owns each key, its state and effect, mic open/closed, master
+  brightness (it tracks the physical dial).
+- **Colours & effects** — pickers, effect menus and brightness per state,
+  five presets (Classic, Matrix, Sunset, Ocean, Mono), **Try** on any key you
+  click, and a **Demo** cycle. **Save** writes `~/.codexpad.json` and the
+  daemon reloads it live.
+- **Setup** — a health checklist (hidapi → device → daemon → hooks →
+  background service) where every ❌ has a button that fixes it.
+- 🌈 **Rainbow** — all six keys run the device's own rainbow effect until you
+  press the dial.
+
+## Sharing the pad with Codex
+
+The ChatGPT desktop app and codexpad both want to drive the same six LEDs, so
+the model is an explicit **handoff**, not a fight:
+
+- **⇆ Hand pad to Codex** — codexpad blanks its lights and goes silent (it
+  keeps *tracking* your Claude sessions in memory), and the vendor client
+  drives the pad.
+- **⇤ Take pad back** — your Claude session states repaint instantly.
+
+Terminal equivalent: `printf '{"cmd":"pause"}' | nc -U /tmp/codexpad.sock`
+(and `resume`). True simultaneous use is on the roadmap — it needs the
+vendor's layer system, which nobody has characterised yet.
+
+## The hardware controls
+
+Input flows back from the pad — the daemon reads the device's own
+notifications and acts on them:
+
+| Control | Built-in action |
+|---|---|
+| Agent Key (`AG00`–`AG05`) | acknowledge that session — green or red returns to dim idle |
+| Dial rotate (`ENC_CW`/`ENC_CC`) | brightness trim, one step per detent |
+| Dial press (`ENC_CLK`) | acknowledge everything finished at once |
+| Mic bar (`ACT10`+`ACT11`) | hold = push-to-talk, double-press = latch; fires `MIC_ON`/`MIC_OFF` |
+| Command Keys (`ACT06`–`ACT09` ⚡✓✗⑂, `ACT12` ✦) | nothing built in — bind them |
+| Stick flick (`STICK_N/E/S/W`) | nothing built in — bind them |
+
+An amber key deliberately can't be answered from the pad — Claude Code has no
+remote-approval interface, so clearing it would lie about the session. What a
+press *can* do is run something of yours: the `commands` table (in the app,
+or `~/.codexpad.json`) binds any identifier to a shell command, run detached
+with `CODEXPAD_KEY`, `CODEXPAD_CWD` and `CODEXPAD_STATE` in the environment:
+
+```json
+"commands": {
+  "ACT06":   "open -a 'Claude'",
+  "MIC_ON":  "shortcuts run 'Start Dictation'",
+  "MIC_OFF": "shortcuts run 'Stop Dictation'",
+  "STICK_N": "say up"
+}
 ```
 
-`install.sh` writes absolute paths into your settings and backs up the existing
-file first. If you prefer to do it by hand, copy
-[`hooks/settings.example.json`](hooks/settings.example.json) and replace
-`PYTHON` and `/PATH/TO/`. After every `git pull`, restart the daemon (the app
-does this check for you and offers a **▶ Start daemon** button).
-
----
+The mic bar sits on two switches folded into one logical key: **hold** it and
+the mic is open for exactly the hold; **double-press** latches it until the
+next double-press. The ambient ring lights red while open (colour
+configurable) — confirmed on hardware, and the first characterisation of the
+device's `v.oai.rgbcfg` zone-lighting method.
 
 ## How it works
 
 ```
-Claude Code hook  ──stdin JSON──▶  notify.py
-                                       │  unix socket
-                                       ▼
-                                   daemon.py  ──lighting──▶  Codex Micro
-                                       ▲                         │
-                                       └── key / dial presses ───┘
+Claude Code hook ──stdin JSON──▶ notify.py ──unix socket──▶ daemon.py ◀──vendor HID──▶ Codex Micro
+                                                                ▲
+                                              control panel ────┘  (reload · preview · pause · status)
 ```
 
 Three deliberate choices:
 
-- **The daemon holds the HID handle.** Opening the device per hook invocation is
-  slow and races against itself.
-- **`notify.py` never fails.** Every error is swallowed, so a dead daemon or an
-  unplugged pad can't break a Claude Code turn.
-- **The daemon never reassembles replies.** Notifications and RPC replies
-  share report ID `0x06`, which is what makes naive reading dangerous
-  ([`PROTOCOL.md`](PROTOCOL.md) §2.2). The reader thread exploits an
-  asymmetry instead: every notification fits one report and parses standalone,
-  while fragments of a chunked reply never do — so anything that doesn't parse
-  alone is dropped, not accumulated. Lighting calls are idempotent and their
-  acks carry nothing; RPC that needs replies lives in `probe.py`.
+- **The daemon holds the HID handle** — opening per hook invocation is slow
+  and races against itself. Install it as a login service and forget it.
+- **`notify.py` never fails** — every error is swallowed, so a dead daemon or
+  an unplugged pad can't break a Claude Code turn. `CODEXPAD_DEBUG=1` logs to
+  `/tmp/codexpad.log`.
+- **The daemon never reassembles RPC replies** — notifications and replies
+  share report ID `0x06` ([`PROTOCOL.md`](PROTOCOL.md) §2.2), but every
+  notification parses standalone and reply fragments never do, so anything
+  unparseable is dropped instead of accumulated. RPC that needs replies lives
+  in `tools/probe.py`.
 
-Two frames go out per state change, because a fully-populated lighting object
-with an 8-digit decimal colour exceeds the 61-byte body limit. Partial updates
-are legal, so it's split. See [`PROTOCOL.md`](PROTOCOL.md) §2.1.
+## The protocol work
 
----
+[`PROTOCOL.md`](PROTOCOL.md) documents the `kbd-1.0-codex-micro`'s vendor HID
+protocol from observation of the author's own device: the 64-byte frame
+format, the abbreviated JSON-RPC envelope, notification schemas for every
+control, the lighting methods, and the physical key map. Every claim carries
+a verification status, and [`tools/probe.py`](tools/probe.py) is the
+instrument that produced it — `enumerate`, `listen`, `version`, `call`,
+`color` — so anyone with the hardware can check the document rather than
+trust it.
 
-## Customising
+Verified on hardware so far: the frame layout and 61-byte body limit,
+response chunking, the envelope's silent `id`-key failure mode, all thirteen
+key identifiers and their physical positions, press/release patterns, the
+analog stick's schema *and* orientation, colour encoding (`0xRRGGBB`, no
+swap), per-thread lighting with split partial updates, and single-zone
+ambient-ring control. Two firmware observations were reported to Work Louder
+before publication (§7). No vendor code is included or redistributed; the
+goal is interoperability, not substitution.
 
-Run the app:
+## Customising by hand
 
-```bash
-python -m codexpad.app               # http://127.0.0.1:8378, localhost only
-```
-
-A live mockup of the pad that mirrors the real one — which session owns each
-key, mic open/closed, master brightness — plus colour pickers and effect
-menus for every state with **Try** on whichever key you click, five theme
-presets (Classic, Matrix, Sunset, Ocean, Mono), a **Demo** cycle, the mic
-ring colour, command bindings, and the 🌈 **Rainbow** button — all six keys
-run the device's own rainbow effect until you press the dial. **Save**
-writes `~/.codexpad.json` and the daemon reloads it on the spot, repainting
-anything currently lit.
-
-The **Claude Code setup** card is the wiring-up story: a live checklist
-(hidapi installed → device on USB → daemon running → hooks in
-`~/.claude/settings.json`) with an **Install hooks** button that runs
-`install.sh` for you. After installing, fully quit and reopen Claude Code.
-
-The same file edits by hand:
+Everything the app edits lives in `~/.codexpad.json`:
 
 ```json
 {
@@ -154,179 +193,47 @@ The same file edits by hand:
 ```
 
 Effects: `0` off, `1` solid, `2` snake, `3` rainbow, `4` breath, `5` gradient,
-`6` shallow breath. Colours are `RRGGBB` — verified, no byte swap. Defaults
-live in `codexpad/config.py`; anything you don't override keeps its default.
-
-The daemon's socket also takes commands directly, no app needed:
-
-```bash
-printf '{"cmd":"rainbow"}' | nc -U /tmp/codexpad.sock    # party
-printf '{"cmd":"off"}'     | nc -U /tmp/codexpad.sock
-printf '{"cmd":"reload"}'  | nc -U /tmp/codexpad.sock    # re-read the config
-```
-
-Try a colour with no daemon at all:
-
-```bash
-python tools/probe.py color 0 FF00FF
-```
-
----
-
-## The buttons
-
-Lighting is half the loop. The daemon also reads the device's notifications
-and acts on them:
-
-| Control | Built-in action |
-|---|---|
-| Agent Key (`AG00`–`AG05`) | acknowledge that session — a green or red key returns to dim idle |
-| Dial rotate (`ENC_CW`/`ENC_CC`) | brightness trim for the whole pad, one step per detent |
-| Dial press (`ENC_CLK`) | acknowledge everything finished at once |
-| Command Keys (`ACT06`–`ACT09` ⚡✓✗⑂, `ACT12` Codex) | nothing built in — bind them below |
-| Mic bar (`ACT10`+`ACT11`) | hold = push-to-talk, double-press = latch; fires `MIC_ON`/`MIC_OFF` |
-| Stick flick (`STICK_N/E/S/W`) | nothing built in — bind them below |
-
-An amber key can't be answered from the pad — Claude Code has no remote
-approval interface — so it stays amber until you respond in the app. What a
-press *can* do is run something of yours. The `commands` table in
-`~/.codexpad.json` — or the Command bindings box in the app — binds any
-control identifier to a shell command:
-
-```json
-"commands": {
-  "ACT06":   "open -a 'Claude'",
-  "ENC_CLK": "say all clear",
-  "STICK_N": "say up"
-}
-```
-
-Commands run detached with `CODEXPAD_KEY`, `CODEXPAD_CWD` and `CODEXPAD_STATE`
-in the environment, so a binding knows which session's key was pressed and
-what state it was in. The daemon prints the identifier of every press it sees
-— press a control, read the log, bind it.
-
-The analog stick streams `v.oai.rad` continuously, so the daemon quantises it:
-a hard push fires a single `STICK_N/E/S/W` flick and re-arms once the stick
-recentres. Orientation was established on hardware (PROTOCOL.md §4.2): `a` is
-zero pushing down and increases counter-clockwise, so up is `0.5`.
-
-### The mic bar
-
-The wide mic key sits on two switches (`ACT10`/`ACT11`), folded into one
-logical key. **Hold it** and the mic is open for exactly the hold;
-**double-press** and it latches open until the next double-press. Opening and
-closing fire `MIC_ON` and `MIC_OFF` — the daemon has no microphone of its
-own, so bind them to your dictation tool:
-
-```json
-"commands": {
-  "MIC_ON":  "shortcuts run 'Start Dictation'",
-  "MIC_OFF": "shortcuts run 'Stop Dictation'"
-}
-```
-
-While the mic is open the daemon lights the ambient ring red (colour
-configurable in the app) — confirmed on hardware, and the first
-characterisation of `v.oai.rgbcfg` (PROTOCOL.md §5.3).
-
----
+`6` shallow breath. Anything you don't override keeps its default
+(`codexpad/config.py`). The daemon's socket takes commands directly:
+`rainbow`, `off`, `reload`, `pause`, `resume`, `status`, `trim`.
 
 ## Troubleshooting
 
-**`open failed` on macOS.** The device exposes a keyboard collection, so macOS
-gates opening it behind Input Monitoring. Add your terminal in System Settings →
-Privacy & Security → Input Monitoring, then **fully quit and relaunch** the
-terminal — grants only apply to new processes. `sudo` works as a stopgap.
-To rule out other causes: if `python tools/probe.py enumerate` lists the
-device, it's this permission — not the cable, and not another app "holding"
-the device. And after running under `sudo`, clean up before going sudo-free:
-`sudo rm -f /tmp/codexpad.sock` (the daemon tells you when this is the issue).
+**`open failed` on macOS.** Input Monitoring. Grant it to your terminal,
+fully quit and relaunch the terminal. If `python tools/probe.py enumerate`
+lists the device, it's this permission — not the cable, and not another app
+"holding" the device. After running under `sudo`, clean up with
+`sudo rm -f /tmp/codexpad.sock` (the daemon says so when this is the issue).
 
-**Device doesn't enumerate.** It's in BLE mode. See wired mode above. A
-charge-only USB-C cable produces identical symptoms.
+**Device doesn't enumerate.** BLE mode (USB charges but doesn't enumerate) or
+a charge-only cable. See wired mode above.
 
 **Hooks don't fire.** Run `/hooks` inside Claude Code — your events should be
-listed with source `User`. If they aren't, the app hasn't reloaded settings;
-quit it completely (not just the window) and reopen.
+listed with source `User`. If not, fully quit and reopen the app. Desktop:
+use the **Code** tab with a **Local** environment; cloud and SSH sessions run
+hooks remotely and can't reach your pad.
 
-**Hooks fire but nothing lights.** Run with `CODEXPAD_DEBUG=1` and check
-`/tmp/codexpad.log`. Test the socket directly:
+**The app misbehaves after a `git pull`.** Restart the daemon — the app
+detects version mismatches and says so. A stale daemon build also misreads
+app commands as hook messages (one key mysteriously lights white). Beware
+stale copies of this repo: early drafts like `~/codexpad`, or a nested clone.
 
-```bash
-printf '{"state":"blocked","cwd":"/tmp/test"}' | nc -U /tmp/codexpad.sock
-```
-
-**Desktop app does nothing.** Make sure you're in the **Code** tab, not Chat,
-and that the environment selector says **Local**. Cloud and SSH sessions execute
-hooks on the remote machine, which can't reach a socket on yours.
-
-**Two sessions share a key.** Only six keys exist; a seventh session evicts the
-least recently used.
-
-**Presses do nothing.** The daemon prints every press it receives. If no
-`press` lines appear, the device isn't reaching the reader — wrong mode, or
-another process holds the handle. If presses print but nothing changes, that's
-expected for keys that aren't green or red; bind them via `COMMANDS`.
-
-**The app's Try button does nothing.** The app's status line and banner say
-why. Usual causes: the daemon isn't running; the daemon is an older build
-that predates app commands — restart it after every `git pull` (the app
-now detects this and says so); or the daemon runs under `sudo` and loaded
-root's config instead of yours (fixed — root now resolves `SUDO_USER`'s
-home). The Setup card's checklist shows device/daemon/hooks state live.
-
-**A key lights up on its own while the app runs, or the app says the daemon
-is unreachable while one is clearly running.** You're running a stale daemon
-build — old daemons misread app commands as hook messages (the app's status
-poll becomes an `idle` for a session called "unknown", lighting a key). The
-app detects this and shows a "mixed builds" warning. Stop every daemon
-(`sudo pkill -f codexpad.daemon`), delete stale copies of this repo
-(early drafts like `~/codexpad`, or a nested clone from running `git clone`
-inside the repo), and start the daemon from the up-to-date folder.
-
-**Keys stay lit after tests.** The device keeps the last lighting it was
-given; nothing clears it but another command. Starting the daemon blanks all
-six keys, and `python -m codexpad.daemon --off` is the one-shot version. While
-the daemon runs, pressing a green or red key clears it; amber deliberately
-doesn't clear on press — it means a session is waiting on you, and if no
-session actually is, the state is stale: restart the daemon.
-
----
-
-## Protocol work
-
-[`PROTOCOL.md`](PROTOCOL.md) documents the frame format, the JSON-RPC envelope,
-the notification schemas, and the lighting methods, with a verification status
-for every claim so you can tell what was confirmed on hardware from what wasn't.
-
-`tools/probe.py` is the instrument used to produce it — `enumerate`, `listen`,
-`version`, `call`, and `color` subcommands. Point it at your own device and
-check the document.
-
-Two firmware observations were reported to Work Louder before publication and
-are noted in §7 of the protocol document.
-
-### On scope
-
-This documents observable device behaviour: bytes sent, bytes received, and the
-resulting state of the hardware. No vendor code is included or redistributed
-here, and the implementation is independent. The goal is interoperability, not
-substitution — if Work Louder or OpenAI ship an official SDK, use that instead.
-
----
+**Keys stay lit.** The device keeps its last lighting. Any daemon start
+blanks all six; `python -m codexpad.daemon --off` is the one-shot; pressing a
+green or red key clears it.
 
 ## Roadmap
 
-- [ ] Remove the `sudo` requirement with a documented Input Monitoring setup
-- [x] Capture the Command Key `k` identifiers — `ACT06`–`ACT12`, physically mapped (PROTOCOL.md §4.1)
-- [x] Confirm the stick's angle orientation — `a=0` down, counter-clockwise (PROTOCOL.md §4.2)
-- [ ] Session navigation on the joystick — flicks fire, but nothing consumes them yet
-- [x] Characterise `v.oai.rgbcfg` `ambient` — confirmed via the mic ring (`keys` zone, `s`/`m`, non-solid effects still open)
-- [x] Confirm `ACT` key releases — hold-to-talk closes on release, so `act: 0` arrives (mic pair, directly)
-- [ ] Linux and Windows testing — currently macOS only
-- [ ] Reconcile with the vendor's own layer system so Codex and Claude coexist
+- [x] Capture the Command Key identifiers — `ACT06`–`ACT12`, physically mapped
+- [x] Stick orientation (`a=0` down, counter-clockwise) and flick events
+- [x] Characterise `v.oai.rgbcfg` `ambient` (`keys` zone, `s`/`m` still open)
+- [x] Confirm `ACT` releases · background service · Codex handoff
+- [ ] Simultaneous Codex + Claude via the vendor's layer system
+- [ ] Session navigation on the joystick — flicks fire, nothing consumes them yet
+- [ ] Windows support (Linux untested but expected to work)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Documentation of observable device behaviour,
+independently implemented; if Work Louder or OpenAI ship an official SDK,
+use that instead.
