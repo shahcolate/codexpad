@@ -199,11 +199,14 @@ tried to hold a USB and a BLE host at once, so "one bus at a time" is what
 we saw, not something we established. If you've run either experiment,
 [open an issue](../../issues) — it settles the question.
 
-Within USB there's also a soft handoff — **⇆ Hand pad to Codex** in the
-panel (or `{"cmd":"pause"}` on the socket) blanks codexpad's lights and
-silences it while still *tracking* your sessions; **⇤ Take pad back**
-repaints them instantly. True simultaneous use needs the vendor's layer
-system — roadmap.
+Within USB the handoff is **automatic**: the panel watches for the ChatGPT
+app, and the moment it opens, codexpad blanks its lights and **releases the
+device entirely** — ChatGPT drives the pad exactly as if codexpad didn't
+exist. When ChatGPT quits, codexpad reconnects and repaints your Claude
+sessions. Zero clicks, on by default (the checkbox under the pad mockup
+turns it off), state survives the round-trip, and a manual **⇆ Hand pad to
+Codex / ⇤ Take pad back** is still there for when you want to force it.
+True *simultaneous* use needs the vendor's layer system — roadmap.
 
 ## Configuration
 
@@ -294,6 +297,7 @@ are the pad being on the wrong bus:
 | One key lights by itself; panel says daemon unreachable | A **stale daemon build** misreads panel commands as hook messages | Restart the daemon from the up-to-date repo; the panel names mixed builds |
 | Keys stay lit after tests | The device keeps its last lighting | Any daemon start blanks; `--off`; press green/red keys |
 | "Rainbow" turned everything red; snake/gradient do nothing | Firmware truth ≠ vendor effect list on Agent Keys | Use solid/breath/shallow-breath; Rainbow now spreads real hues in software |
+| ChatGPT stopped driving the pad since codexpad arrived | The daemon held the device / stomped the vendor lights | Update — auto-handoff releases the pad while ChatGPT runs. For BLE instead: tap the touch key to a blue-ring channel and re-pair |
 | Hooks don't fire | Claude Code reads settings at launch | Fully quit and reopen; Desktop: **Code** tab + **Local** environment |
 | Need to stop everything | The app supervises and revives things by design | `sudo codexpad-stop` (daemon only) or `./make_login_app.sh remove` (stops, then uninstalls) |
 
@@ -335,7 +339,7 @@ app's supervisor would otherwise both spawn daemons.)
 - [x] Buttons, dial, stick flicks, mic state machine with ring indicator
 - [x] Control panel, presets, hook installer, health checks
 - [x] Codexpad.app: self-healing launch, login start, icon, grant-preserving `update`
-- [x] Codex handoff (pause/resume, survives restarts) + the transport discovery
+- [x] Codex handoff: automatic — pad released while ChatGPT runs, reclaimed on quit (plus manual pause/resume, survives restarts) + the transport discovery
 - [x] Self-diagnosing panel: daemon/pad status strip with the exact fix
 - [x] Mic → your login session: `mic_on_command`/`mic_off_command` (dictation-ready)
 - [ ] Simultaneous Codex + Claude via the vendor's layer system

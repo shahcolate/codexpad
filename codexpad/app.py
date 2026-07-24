@@ -210,6 +210,45 @@ def install_service():
                     + SERVICE_PLIST}
 
 
+_codex = {"running": False, "auto_paused": False}
+
+
+def codex_watch_step(running=None):
+    """One tick of the ChatGPT auto-handoff (macOS).
+
+    ChatGPT app appears -> pause the daemon (blank + release the device) so
+    the vendor client drives the pad, exactly like before codexpad existed.
+    ChatGPT quits -> resume, repaint Claude states. Only ever resumes a pause
+    it made itself, so a manual 'Hand pad to Codex' stays handed off.
+    """
+    if running is None:
+        running = subprocess.run(["pgrep", "-x", "ChatGPT"],
+                                 capture_output=True).returncode == 0
+    was = _codex["running"]
+    _codex["running"] = running
+    if not config.load().get("auto_handoff", True):
+        return
+    if running and not was:
+        st = ask_daemon({"cmd": "status"})
+        if "error" not in st and not st.get("paused"):
+            ask_daemon({"cmd": "pause"})
+            _codex["auto_paused"] = True
+            print("handoff: ChatGPT opened — pad released to it", flush=True)
+    elif was and not running and _codex["auto_paused"]:
+        _codex["auto_paused"] = False
+        ask_daemon({"cmd": "resume"})
+        print("handoff: ChatGPT quit — pad is Claude's again", flush=True)
+
+
+def codex_watcher():
+    while True:
+        try:
+            codex_watch_step()
+        except Exception:
+            pass
+        time.sleep(3)
+
+
 def event_pump():
     """Mirror pad events into the user's login session, forever.
 
@@ -419,6 +458,10 @@ it needs you, green when it's done.</p>
         <button onclick="off()">⏻ Off</button>
         <button id="handoff" onclick="handoff()">⇆ Hand pad to Codex</button>
       </div>
+      <label class="hint" style="display:block;margin-top:.7rem">
+        <input type="checkbox" id="autohand">
+        auto-handoff: give ChatGPT the pad while it's open, take it back when it quits
+      </label>
     </div>
   </div>
   <div id="toast">loading…</div>
@@ -584,6 +627,7 @@ async function save() {
                  mic_color: $("#mic").value.slice(1).toUpperCase(),
                  mic_on_command: $("#micon").value.trim(),
                  mic_off_command: $("#micoff").value.trim(),
+                 auto_handoff: $("#autohand").checked,
                  port: cfg.port };
   const r = await api("/api/config", body);
   say(r.error ? "saved, but: " + r.error : "saved — daemon reloaded ✓");
@@ -647,9 +691,11 @@ function paintHw(s) {
     return;
   }
   const d = s.device || {connected: true};
-  if (d.connected) {
-    if (s.paused) hw("warn", "● pad handed to Codex — take it back below when you want Claude states again.");
-    else hw("ok", "● daemon running · pad connected — buttons below act on the real pad.");
+  if (s.paused) {
+    hw("warn", "● pad handed to Codex — ChatGPT owns the lights. It comes back " +
+       "automatically when ChatGPT quits (auto-handoff), or click Take pad back.");
+  } else if (d.connected) {
+    hw("ok", "● daemon running · pad connected — buttons below act on the real pad.");
   } else if (d.seen) {
     hw("bad", "● daemon running, pad on USB, but macOS blocks opening it — Input Monitoring.\\n" +
        "Fix: System Settings → Privacy & Security → Input Monitoring → REMOVE the old " +
@@ -783,6 +829,8 @@ $("#trim").onchange = async () => {
   $("#mic").value = "#" + cfg.mic_color;
   $("#micon").value = cfg.mic_on_command || "";
   $("#micoff").value = cfg.mic_off_command || "";
+  $("#autohand").checked = cfg.auto_handoff !== false;
+  $("#autohand").onchange = () => { save(); };
   $("#commands").value = JSON.stringify(cfg.commands, null, 2);
   $("#cfgpath").textContent = cfg.config_path || "~/.codexpad.json";
   $("#presets").innerHTML = Object.keys(PRESETS)
@@ -887,6 +935,8 @@ def main():
               flush=True)
 
     threading.Thread(target=event_pump, daemon=True).start()
+    if sys.platform == "darwin":
+        threading.Thread(target=codex_watcher, daemon=True).start()
 
     port = config.load().get("port", config.PORT)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)

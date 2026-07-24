@@ -536,33 +536,52 @@ class Device:
         self.last_error = ""
         return fresh
 
+    def release(self):
+        """Let go of the pad entirely (handoff): close the handle so the
+        vendor client gets it clean. watch() won't reopen while paused."""
+        if not self.lost:
+            self.close()
+            self._h = None
+            self.lost = True
+            print("  device  released to the vendor client", flush=True)
+
+    def reconnect_now(self):
+        """One immediate open attempt (resume shouldn't wait for watch())."""
+        if not self.lost:
+            return True
+        fresh = self._try_open()
+        if fresh is None:
+            return False
+        self.close()
+        self._h = fresh
+        self.lost = False
+        print("  device  connected", flush=True)
+        return True
+
     def watch(self):
         announced = False
         while True:
+            if _paused[0]:              # handed off: leave the pad alone
+                time.sleep(2)
+                continue
             if not self.lost:
                 announced = False
                 time.sleep(2)
                 continue
-            fresh = self._try_open()
-            if fresh is None:
+            if not self.reconnect_now():
                 if not announced:
                     print("  device  waiting for the Codex Micro: "
                           + self.diagnosis(), flush=True)
                     announced = True
                 time.sleep(2)
                 continue
-            self.close()
-            self._h = fresh
-            self.lost = False
             announced = False
-            print("  device  connected — painting", flush=True)
             with _lock:
                 lit = [(s, st) for s, st in _slot_state.items()
                        if st and st != "off"]
-            if not _paused[0]:
-                blank_all(self)     # clear whatever the pad was showing
-                for slot, state in lit:
-                    set_slot(self, slot, state)
+            blank_all(self)             # clear whatever the pad was showing
+            for slot, state in lit:
+                set_slot(self, slot, state)
 
 
 def _pad_error(handle):
@@ -619,9 +638,13 @@ def handle_request(handle, req):
     """
     if "cmd" in req:
         cmd = req["cmd"]
+        if cmd in ("preview", "rainbow", "off", "trim") and _paused[0]:
+            return {"error": "pad is handed to Codex right now — quit the "
+                             "ChatGPT app (auto-handoff) or click Take pad "
+                             "back first"}
         if cmd in ("preview", "rainbow", "off", "trim", "resume"):
             pad_err = _pad_error(handle)
-            if pad_err:
+            if pad_err and not (cmd == "resume" and _paused[0]):
                 return pad_err
         if cmd == "ping":
             pass
@@ -663,8 +686,9 @@ def handle_request(handle, req):
             for slot, state in lit:
                 set_slot(handle, slot, state)
         elif cmd == "pause":
-            # hand the pad to the vendor client: blank our lights, go quiet,
-            # but keep tracking session states so resume can repaint them
+            # hand the pad to the vendor client: blank our lights, then let
+            # go of the device entirely so ChatGPT gets it clean — while
+            # still tracking session states so resume can repaint them
             with _lock:
                 snapshot = dict(_slot_state)
             blank_all(handle)
@@ -672,6 +696,8 @@ def handle_request(handle, req):
                 _slot_state.clear()
                 _slot_state.update(snapshot)
                 _paused[0] = True
+            if isinstance(handle, Device):
+                handle.release()
             try:                      # survive a daemon restart mid-handoff
                 open(PAUSE_FLAG, "w").close()
             except OSError:
@@ -686,6 +712,9 @@ def handle_request(handle, req):
                 os.unlink(PAUSE_FLAG)
             except OSError:
                 pass
+            if isinstance(handle, Device):
+                handle.reconnect_now()   # don't wait for watch()'s next tick
+            blank_all(handle)            # clear the vendor client's leftovers
             for slot, state in lit:
                 set_slot(handle, slot, state)
             print("  resume  pad is ours again", flush=True)

@@ -53,6 +53,10 @@ DEFAULTS = {
     # can't reach. Left empty they do nothing.
     "mic_on_command": "",
     "mic_off_command": "",
+    # macOS: when the ChatGPT app is running, hand the pad to it (release the
+    # device, go quiet) and take it back when the app quits -- the vendor
+    # client and codexpad share the pad with zero clicks.
+    "auto_handoff": True,
     "port": PORT,
 }
 
@@ -80,6 +84,8 @@ def load():
     for key in ("mic_on_command", "mic_off_command"):
         if isinstance(user.get(key), str):
             cfg[key] = user[key]
+    if isinstance(user.get("auto_handoff"), bool):
+        cfg["auto_handoff"] = user["auto_handoff"]
     if isinstance(user.get("port"), int):
         cfg["port"] = user["port"]
     return cfg
@@ -89,7 +95,8 @@ def save(user_cfg):
     """Write the user-editable subset to CONFIG_PATH."""
     keep = {key: user_cfg[key]
             for key in ("states", "commands", "mic_color",
-                        "mic_on_command", "mic_off_command", "port")
+                        "mic_on_command", "mic_off_command",
+                        "auto_handoff", "port")
             if key in user_cfg}
     with open(CONFIG_PATH, "w") as fh:
         json.dump(keep, fh, indent=2)
