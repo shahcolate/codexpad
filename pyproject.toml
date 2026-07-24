@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codexpad"
+version = "0.5.0"
+description = "Drive OpenAI's Codex Micro macropad from Claude Code"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Shah Alam Baig" }]
+dependencies = ["hidapi"]
+keywords = ["codex-micro", "macropad", "claude-code", "hid", "work-louder"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: System :: Hardware",
+]
+
+[project.urls]
+Homepage = "https://github.com/shahcolate/codexpad"
+Protocol = "https://github.com/shahcolate/codexpad/blob/main/PROTOCOL.md"
+
+[project.scripts]
+codexpad = "codexpad.app:main"
+
+[tool.setuptools]
+packages = ["codexpad"]

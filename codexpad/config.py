@@ -57,6 +57,16 @@ DEFAULTS = {
     # device, go quiet) and take it back when the app quits -- the vendor
     # client and codexpad share the pad with zero clicks.
     "auto_handoff": True,
+    # Pressing a working/blocked Agent Key focuses that session. Empty = the
+    # panel auto-raises the first running app it knows (Claude, Cursor,
+    # iTerm, VS Code, Terminal); or set your own command (CODEXPAD_CWD env).
+    "focus_command": "",
+    # Opt-in: the checkmark/cross Command Keys answer the FOCUSED prompt by
+    # typing Enter / Escape (panel-run AppleScript, needs Accessibility).
+    "approve_from_pad": False,
+    # A session blocked longer than this lights the ambient ring amber as a
+    # louder nag. 0 disables.
+    "nag_minutes": 10,
     "port": PORT,
 }
 
@@ -81,11 +91,15 @@ def load():
         cfg["commands"] = user["commands"]
     if isinstance(user.get("mic_color"), str):
         cfg["mic_color"] = user["mic_color"]
-    for key in ("mic_on_command", "mic_off_command"):
+    for key in ("mic_on_command", "mic_off_command", "focus_command"):
         if isinstance(user.get(key), str):
             cfg[key] = user[key]
-    if isinstance(user.get("auto_handoff"), bool):
-        cfg["auto_handoff"] = user["auto_handoff"]
+    for key in ("auto_handoff", "approve_from_pad"):
+        if isinstance(user.get(key), bool):
+            cfg[key] = user[key]
+    if isinstance(user.get("nag_minutes"), (int, float)) \
+            and not isinstance(user.get("nag_minutes"), bool):
+        cfg["nag_minutes"] = max(0, user["nag_minutes"])
     if isinstance(user.get("port"), int):
         cfg["port"] = user["port"]
     return cfg
@@ -96,7 +110,8 @@ def save(user_cfg):
     keep = {key: user_cfg[key]
             for key in ("states", "commands", "mic_color",
                         "mic_on_command", "mic_off_command",
-                        "auto_handoff", "port")
+                        "auto_handoff", "focus_command", "approve_from_pad",
+                        "nag_minutes", "port")
             if key in user_cfg}
     with open(CONFIG_PATH, "w") as fh:
         json.dump(keep, fh, indent=2)

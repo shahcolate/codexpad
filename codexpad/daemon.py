@@ -94,7 +94,13 @@ def load_config():
     COMMANDS.update({k: v for k, v in cfg["commands"].items()
                      if isinstance(v, str)})
     MIC_COLOR[0] = config.color_int(cfg["mic_color"])
+    APPROVE_FROM_PAD[0] = bool(cfg.get("approve_from_pad"))
+    NAG_MINUTES[0] = cfg.get("nag_minutes", 10)
     return cfg
+
+
+APPROVE_FROM_PAD = [False]    # checkmark/cross answer the focused prompt
+NAG_MINUTES = [10]            # ring lights after this long blocked; 0 = off
 
 
 load_config()
@@ -109,6 +115,30 @@ _lock = threading.RLock()     # serialises HID writes and the slot tables
 # with a restart loop, and a respawn that forgot it was paused would repaint
 # Claude states all over the vendor client mid-handoff.
 PAUSE_FLAG = SOCK_PATH + ".paused"
+
+# --- session stats -----------------------------------------------------------
+# The daemon sees every session's lifecycle anyway; keep the running tally the
+# panel shows as the "Today" card. blocked_s is the headline: how long Claude
+# sat waiting on YOU.
+_stats = {"since": time.time(), "sessions": 0, "turns": 0, "errors": 0,
+          "working_s": 0.0, "blocked_s": 0.0}
+_state_since = {}             # cwd -> (semantic state, t0) from hook messages
+
+
+def _note_transition(cwd, new_state):
+    """Accumulate time spent working/blocked as hook states change."""
+    now = time.time()
+    prev = _state_since.get(cwd)
+    if prev:
+        old, t0 = prev
+        if old == "working":
+            _stats["working_s"] += now - t0
+        elif old == "blocked":
+            _stats["blocked_s"] += now - t0
+    if new_state == "end":
+        _state_since.pop(cwd, None)
+    else:
+        _state_since[cwd] = (new_state, now)
 
 # --- event feed --------------------------------------------------------------
 # The panel long-polls {"cmd": "wait_event"} to mirror pad activity into the
@@ -297,8 +327,8 @@ def flick(a, d):
             run_command(name, None, None)
 
 
-def set_ring(handle, on):
-    """Light the ambient ring as the mic indicator.
+def set_ring(handle, on, color=None):
+    """Light the ambient ring (mic indicator, nag light, MCP callers).
 
     Single-zone partial updates, split across two frames like set_slot to fit
     the 61-byte body, fire and forget. This path is what confirmed the ambient
@@ -307,10 +337,70 @@ def set_ring(handle, on):
     probe the method directly and report what it returns.
     """
     if on:
-        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"c": MIC_COLOR[0]}})
+        _rpc(handle, "v.oai.rgbcfg",
+             {"ambient": {"c": MIC_COLOR[0] if color is None else color}})
         _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 1, "b": 1}})
     else:
         _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 0, "b": 0}})
+
+
+_last_pulse = {}              # slot -> last shimmer, rate-limited
+
+
+def pulse(handle, slot):
+    """A one-blink shimmer on a working key: each tool call flickers it, so a
+    busy session visibly differs from one just sitting in 'working'."""
+    now = time.time()
+    if now - _last_pulse.get(slot, 0) < 0.5:
+        return
+    _last_pulse[slot] = now
+    with _lock:
+        state = _slot_state.get(slot)
+        if state != "working":
+            return
+        _, _, brightness = STATES[state]
+        _rpc(handle, "v.oai.thstatus",
+             [{"id": slot, "b": round(max(0.15, brightness * _trim[0] * 0.3), 2)}])
+
+    def restore():
+        with _lock:
+            if _slot_state.get(slot) == "working" and not _paused[0]:
+                _rpc(handle, "v.oai.thstatus",
+                     [{"id": slot, "b": round(brightness * _trim[0], 2)}])
+    threading.Timer(0.12, restore).start()
+
+
+_nag_on = [False]
+
+
+def nag_tick(handle):
+    """Escalate a long-ignored amber: light the ambient ring in the blocked
+    colour once any session has waited longer than nag_minutes."""
+    if not NAG_MINUTES[0] or _paused[0] or _mic["open"]:
+        if _mic["open"]:
+            _nag_on[0] = False   # mic owns the ring; re-light after it closes
+        return
+    now = time.time()
+    with _lock:
+        overdue = any(st == "blocked" and now - t0 > NAG_MINUTES[0] * 60
+                      for st, t0 in _state_since.values())
+    if overdue and not _nag_on[0]:
+        _nag_on[0] = True
+        set_ring(handle, True, color=STATES["blocked"][0])
+        print("  nag     a session has been waiting on you — ring lit",
+              flush=True)
+    elif not overdue and _nag_on[0]:
+        _nag_on[0] = False
+        set_ring(handle, False)
+
+
+def nagger(handle):
+    while True:
+        time.sleep(20)
+        try:
+            nag_tick(handle)
+        except Exception:
+            pass
 
 
 def _mic_set(handle, is_open, how):
@@ -392,6 +482,15 @@ def dispatch(handle, msg):
               flush=True)
         if state in ("done", "error", "rainbow"):
             set_slot(handle, slot, "idle" if cwd else "off")
+        elif state in ("working", "blocked") and cwd:
+            # take me there: the panel focuses this session's window
+            emit_event({"t": "FOCUS", "cwd": cwd, "state": state})
+    elif key == "ACT07" and APPROVE_FROM_PAD[0]:
+        print("  press   ACT07 (approve -> Enter)", flush=True)
+        emit_event({"t": "APPROVE"})
+    elif key == "ACT08" and APPROVE_FROM_PAD[0]:
+        print("  press   ACT08 (decline -> Esc)", flush=True)
+        emit_event({"t": "DECLINE"})
     elif key == "ENC_CW":
         trim(handle, +0.1)
     elif key == "ENC_CC":
@@ -638,11 +737,11 @@ def handle_request(handle, req):
     """
     if "cmd" in req:
         cmd = req["cmd"]
-        if cmd in ("preview", "rainbow", "off", "trim") and _paused[0]:
+        if cmd in ("preview", "rainbow", "off", "trim", "ring") and _paused[0]:
             return {"error": "pad is handed to Codex right now — quit the "
                              "ChatGPT app (auto-handoff) or click Take pad "
                              "back first"}
-        if cmd in ("preview", "rainbow", "off", "trim", "resume"):
+        if cmd in ("preview", "rainbow", "off", "trim", "ring", "resume"):
             pad_err = _pad_error(handle)
             if pad_err and not (cmd == "resume" and _paused[0]):
                 return pad_err
@@ -655,6 +754,7 @@ def handle_request(handle, req):
                         "device": (handle.status() if isinstance(handle, Device)
                                    else {"connected": True, "seen": True,
                                          "error": ""}),
+                        "stats": dict(_stats),
                         "mic": {"open": _mic["open"], "latched": _mic["latched"]},
                         "slots": [{"slot": i,
                                    "state": _slot_state.get(i) or "off",
@@ -742,13 +842,31 @@ def handle_request(handle, req):
         elif cmd == "off":
             blank_all(handle)
             print("  off     all keys", flush=True)
+        elif cmd == "ring":
+            if req.get("on"):
+                set_ring(handle, True,
+                         color=config.color_int(req["color"])
+                         if req.get("color") else None)
+            else:
+                set_ring(handle, False)
+            print(f"  ring    {'on' if req.get('on') else 'off'}", flush=True)
         else:
             return {"error": f"unknown cmd {cmd!r}"}
         return {"ok": 1}
 
     state = req.get("state", "idle")
     cwd = req.get("cwd", "unknown")
+    if state == "pulse":
+        # PreToolUse heartbeat: a short shimmer on the session's key shows
+        # Claude actively doing things (vs idle thinking). Never allocates a
+        # slot -- unknown sessions are ignored.
+        with _lock:
+            slot = _slots.get(cwd)
+        if slot is not None and not _paused[0]:
+            pulse(handle, slot)
+        return {"ok": 1}
     if state == "end":
+        _note_transition(cwd, "end")
         slot = release(cwd)
         if slot is not None:
             if _paused[0]:
@@ -758,6 +876,15 @@ def handle_request(handle, req):
                 set_slot(handle, slot, "off")
             print(f"  {'end':<7} slot={slot} {cwd}", flush=True)
     elif state in STATES:
+        with _lock:
+            is_new = cwd not in _slots
+        _note_transition(cwd, state)
+        if is_new:
+            _stats["sessions"] += 1
+        if state == "done":
+            _stats["turns"] += 1
+        elif state == "error":
+            _stats["errors"] += 1
         slot = slot_for(cwd)
         if _paused[0]:
             with _lock:
@@ -812,6 +939,7 @@ def serve(handle):
 
     handle.set_nonblocking(True)
     threading.Thread(target=reader, args=(handle,), daemon=True).start()
+    threading.Thread(target=nagger, args=(handle,), daemon=True).start()
     if isinstance(handle, Device):
         threading.Thread(target=handle.watch, daemon=True).start()
     print(f"codexpad ready on {SOCK_PATH} "

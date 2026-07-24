@@ -41,7 +41,9 @@ your own pad instead of trusting it.
 |---|---|
 | Session starts | white, dim |
 | You submit a prompt | blue, breathing |
+| Every tool call | a quick **shimmer** on the blue — you can *see* it working |
 | Claude needs approval or input | **amber, breathing** |
+| Ignored amber for 10 minutes | the **ambient ring** lights amber too (configurable nag) |
 | Turn completes | green |
 | Turn fails on an API error | red |
 | Session ends | off |
@@ -50,6 +52,14 @@ Each session is identified by its working directory — Desktop gives every
 session an isolated worktree, so the mapping needs no bookkeeping. A seventh
 session evicts the least recently used key. Pressing a green or red key
 acknowledges it; the dial trims brightness and clears the board.
+
+And it flows the other way — **the pad drives Claude**:
+
+| You press | What happens |
+|---|---|
+| A **working or amber** key | that session's window comes to the front (auto-detects Claude / Cursor / iTerm / VS Code / Terminal, or your own `focus_command`) |
+| **✓** / **✗** (opt-in) | Enter / Escape typed into the focused prompt — approve or decline without touching the keyboard |
+| The **mic bar** | your `mic_on_command` fires in your login session — one click wires it to macOS dictation |
 
 ## Install
 
@@ -99,7 +109,9 @@ python -m codexpad
 starts the daemon and opens the panel at **http://127.0.0.1:8378**; the
 setup card walks you through the rest with buttons. On Linux the daemon
 usually just opens the device (udev permitting) with none of the macOS
-ceremony.
+ceremony. Also pip-installable straight from GitHub
+(`pip install git+https://github.com/shahcolate/codexpad`), which puts a
+`codexpad` command on your PATH.
 
 ### If macOS fights you
 
@@ -127,7 +139,10 @@ one-word shell function.
   you click, a **Demo** cycle. **Save** writes `~/.codexpad.json` and the
   daemon repaints live.
 - **Mic & bindings** — ring colour, **Use macOS Dictation** one-click setup
-  with Test buttons, and shell bindings for every control.
+  with Test buttons, the **Pad → Claude** controls (focus command, ✓/✗
+  approve toggle, nag threshold), and shell bindings for every control.
+- **A running tally** under the mockup — sessions, turns, and the honest
+  number: minutes Claude spent waiting on *you*.
 - **Setup** — a health checklist (hidapi → device → daemon → hooks →
   runs-at-login) where every ❌ has a button that fixes it, including
   **Install hooks** (merges into `~/.claude/settings.json`, backup first)
@@ -220,6 +235,36 @@ turns it off), state survives the round-trip, and a manual **⇆ Hand pad to
 Codex / ⇤ Take pad back** is still there for when you want to force it.
 True *simultaneous* use needs the vendor's layer system — roadmap.
 
+## MCP — let anything drive the pad
+
+codexpad ships an MCP server (stdlib-only, like everything here):
+
+```bash
+claude mcp add codexpad -- python -m codexpad.mcp
+```
+
+Now any MCP client — Claude Desktop chats, agents, scripts — gets six tools:
+`pad_status`, `pad_set` (paint a key), `pad_session` (named sessions with the
+same lifecycle hooks use), `pad_ring`, `pad_rainbow`, `pad_off`. Which means
+you can just *tell Claude* "light key 3 green when the deploy finishes" or
+have an agent track its long task on a key by calling
+`pad_session(name="deploy", state="working")` … `state="done"`. The daemon
+must be running; the server forwards over its socket.
+
+## Remote sessions
+
+Hooks from cloud/web Claude Code sessions run on the remote machine, so they
+can't reach your local socket. The panel exposes a relay: anything that can
+reach `localhost:8378` (say, over an SSH tunnel) can post hook-shaped events:
+
+```bash
+curl -s -X POST http://127.0.0.1:8378/api/hook \
+  -d '{"state": "working", "cwd": "remote:mybox"}'
+```
+
+The panel binds 127.0.0.1 only — expose it via a tunnel
+(`ssh -R 8378:127.0.0.1:8378 …`), never directly.
+
 ## Configuration
 
 Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
@@ -232,16 +277,20 @@ Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
   "commands": {"ACT06": "open -a 'Claude'"},
   "mic_color": "FF0000",
   "mic_on_command": "",
-  "mic_off_command": ""
+  "mic_off_command": "",
+  "auto_handoff": true,
+  "focus_command": "",
+  "approve_from_pad": false,
+  "nag_minutes": 10
 }
 ```
 
-Effects: `0` off, `1` solid, `2` snake, `3` rainbow, `4` breath, `5`
-gradient, `6` shallow breath — `1` is confirmed on hardware, the rest come
-from the vendor client's enumeration and haven't each been exercised.
-Colours are `RRGGBB` — verified, no byte swap. The daemon's socket takes
-commands directly: `rainbow`, `off`, `reload`, `pause`, `resume`, `status`,
-`trim`, `wait_event` (long-poll for mic events), e.g.
+Effects: `0` off, `1` solid, `4` breath, `6` shallow breath — all confirmed
+on hardware. `2` snake and `5` gradient do nothing on real Agent Keys, and
+`3` rainbow renders solid red (PROTOCOL.md §5.2). Colours are `RRGGBB` —
+verified, no byte swap. The daemon's socket takes commands directly:
+`rainbow`, `off`, `ring`, `reload`, `pause`, `resume`, `status`, `trim`,
+`wait_event` (long-poll for pad events), e.g.
 `printf '{"cmd":"status"}' | nc -U /tmp/codexpad.sock`.
 
 ## How it works
@@ -354,9 +403,14 @@ app's supervisor would otherwise both spawn daemons.)
 - [x] Codex handoff: automatic — pad released while ChatGPT runs, reclaimed on quit (plus manual pause/resume, survives restarts) + the transport discovery
 - [x] Self-diagnosing panel: daemon/pad status strip with the exact fix
 - [x] Mic → your login session: `mic_on_command`/`mic_off_command` (dictation-ready)
+- [x] Pad → Claude: amber-key window focus, opt-in ✓/✗ approve/decline
+- [x] Tool-call shimmer (PreToolUse), amber nag escalation on the ring
+- [x] MCP server: `pad_*` tools for Claude Desktop, agents, scripts
+- [x] Remote-session relay (`/api/hook`), pip install from git, session stats
 - [ ] Simultaneous Codex + Claude via the vendor's layer system
 - [ ] Native menu-bar app (panel without the browser)
-- [ ] Joystick session navigation; `keys` zone; `s`/`m` fields
+- [ ] Joystick session navigation; `keys` zone; `s`/`m` fields (may fix the broken firmware effects)
+- [ ] Local Whisper on the mic bar (no macOS dictation dependency)
 - [ ] Windows support (Linux untested but expected to work)
 
 ## License & scope

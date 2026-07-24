@@ -1,3 +1,3 @@
 """codexpad - drive the Codex Micro macropad from Claude Code hooks."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

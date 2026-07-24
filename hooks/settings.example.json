@@ -61,6 +61,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "PYTHON /PATH/TO/codexpad/notify.py pulse"
+          }
+        ]
+      }
     ]
   }
 }

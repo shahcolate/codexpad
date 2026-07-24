@@ -29,7 +29,7 @@ from . import __version__ as VERSION
 from . import config
 
 HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Notification",
-               "Stop", "StopFailure", "SessionEnd"]
+               "Stop", "StopFailure", "SessionEnd", "PreToolUse"]
 
 
 def ask_daemon(payload):
@@ -54,6 +54,19 @@ def ask_daemon(payload):
 
 def daemon_running():
     return "error" not in ask_daemon({"cmd": "ping"})
+
+
+def tell_daemon(payload):
+    """Fire-and-forget a hook-shaped message (those get no reply)."""
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(1.0)
+        sock.connect(config.SOCK_PATH)
+        sock.send(json.dumps(payload).encode())
+        sock.close()
+        return True
+    except Exception:
+        return False
 
 
 _daemon_proc = [None]
@@ -249,14 +262,69 @@ def codex_watcher():
         time.sleep(3)
 
 
+# Focus targets, most specific first: the running one gets `open -a`'d,
+# which raises an app without needing any AppleEvents/Accessibility grant.
+FOCUS_APPS = [("Claude.app", "Claude"), ("Cursor.app", "Cursor"),
+              ("iTerm.app", "iTerm"),
+              ("Visual Studio Code.app", "Visual Studio Code"),
+              ("Terminal.app", "Terminal")]
+
+
+def _run(cmd, **extra_env):
+    env = dict(os.environ, **extra_env)
+    subprocess.Popen(cmd, shell=True, env=env,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def focus_session(cwd, cfg):
+    """Bring the session that needs you to the front (amber-key press)."""
+    custom = (cfg.get("focus_command") or "").strip()
+    if custom:
+        _run(custom, CODEXPAD_CWD=cwd or "")
+        return "focus_command"
+    if sys.platform != "darwin":
+        return None
+    for marker, app in FOCUS_APPS:
+        if subprocess.run(["pgrep", "-f", marker],
+                          capture_output=True).returncode == 0:
+            _run(f"open -a '{app}'")
+            return app
+    return None
+
+
+def handle_panel_event(ev, cfg):
+    """One pad event, acted on in the user's login session."""
+    if isinstance(ev, str):             # mic events travel as plain names
+        cmd = {"MIC_ON": cfg.get("mic_on_command"),
+               "MIC_OFF": cfg.get("mic_off_command")}.get(ev)
+        if cmd:
+            _run(cmd)
+            print(f"mic: {ev} -> {cmd}", flush=True)
+        return
+    t = ev.get("t") if isinstance(ev, dict) else None
+    if t == "FOCUS":
+        target = focus_session(ev.get("cwd"), cfg)
+        print(f"focus: {ev.get('cwd')} -> {target or 'no target found'}",
+              flush=True)
+    elif t == "APPROVE":
+        _run("osascript -e 'tell application \"System Events\" "
+             "to keystroke return'")
+        print("approve: Enter sent to the focused app", flush=True)
+    elif t == "DECLINE":
+        _run("osascript -e 'tell application \"System Events\" "
+             "to key code 53'")
+        print("decline: Esc sent to the focused app", flush=True)
+
+
 def event_pump():
     """Mirror pad events into the user's login session, forever.
 
-    Long-polls the daemon's wait_event and runs the configured
-    mic_on_command / mic_off_command here — as the logged-in user, where
-    dictation shortcuts and AppleScript actually work. The (possibly root)
-    daemon never executes these. Quietly rides out daemon restarts and
-    daemons too old to know wait_event.
+    Long-polls the daemon's wait_event and acts on what comes back — mic
+    open/close commands, session-focus requests, approve/decline keystrokes.
+    All of it runs here, as the logged-in user, where dictation shortcuts
+    and AppleScript actually work; the (possibly root) daemon never executes
+    any of it. Quietly rides out daemon restarts and daemons too old to know
+    wait_event.
     """
     last = -1
     while True:
@@ -273,17 +341,11 @@ def event_pump():
         if not events:
             continue
         cfg = config.load()
-        for name in events:
-            cmd = {"MIC_ON": cfg.get("mic_on_command"),
-                   "MIC_OFF": cfg.get("mic_off_command")}.get(name)
-            if cmd:
-                try:
-                    subprocess.Popen(cmd, shell=True,
-                                     stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
-                    print(f"mic: {name} -> {cmd}", flush=True)
-                except Exception as exc:
-                    print(f"mic: {name} command failed: {exc}", flush=True)
+        for ev in events:
+            try:
+                handle_panel_event(ev, cfg)
+            except Exception as exc:
+                print(f"event {ev!r} failed: {exc}", flush=True)
 
 
 def run_install():
@@ -465,6 +527,7 @@ it needs you, green when it's done.</p>
     </div>
   </div>
   <div id="toast">loading…</div>
+  <div id="today" class="hint" style="margin-top:.4rem"></div>
 </div>
 
 <div class="card">
@@ -497,6 +560,21 @@ it needs you, green when it's done.</p>
     <input type="text" id="micon" placeholder="command run when the mic opens"></label>
   <label class="hint" style="display:block;margin-top:.4rem">mic closes →
     <input type="text" id="micoff" placeholder="command run when the mic closes"></label>
+  <h2 style="margin-top:1.6rem">Pad → Claude</h2>
+  <p class="hint">Press a <b>working or amber key</b> and this app brings that
+  session's window forward (auto-detects Claude / Cursor / iTerm / VS Code /
+  Terminal — or set your own command, run with <code>CODEXPAD_CWD</code>):</p>
+  <label class="hint">focus command (blank = auto)
+    <input type="text" id="focuscmd" placeholder="auto — raises the first running app it knows"></label>
+  <label class="hint" style="display:block;margin-top:.6rem">
+    <input type="checkbox" id="approve">
+    ✓ / ✗ keys answer the <b>focused</b> prompt (Enter / Escape — AppleScript,
+    needs Accessibility; make sure the right window is front)
+  </label>
+  <label class="hint" style="display:block;margin-top:.6rem">
+    ring nags after <input type="number" id="nagmin" min="0" max="120"
+      style="width:4.5rem"> minutes blocked (0 = off)
+  </label>
   <p class="hint" style="margin-top:1rem">Shell commands by control — AG00–AG05,
   ACT06–ACT09, ACT12, ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF
   (these run from the daemon, dropped to your user). Saved with the button above.</p>
@@ -628,6 +706,9 @@ async function save() {
                  mic_on_command: $("#micon").value.trim(),
                  mic_off_command: $("#micoff").value.trim(),
                  auto_handoff: $("#autohand").checked,
+                 focus_command: $("#focuscmd").value.trim(),
+                 approve_from_pad: $("#approve").checked,
+                 nag_minutes: Math.max(0, +$("#nagmin").value || 0),
                  port: cfg.port };
   const r = await api("/api/config", body);
   say(r.error ? "saved, but: " + r.error : "saved — daemon reloaded ✓");
@@ -678,6 +759,17 @@ function paintPad(status) {
   padPaused = !!status.paused;
   $("#handoff").textContent = padPaused ? "⇤ Take pad back" : "⇆ Hand pad to Codex";
   $("#pad").style.opacity = padPaused ? .45 : 1;
+  if (status.stats) {
+    const t = status.stats, mins = s => Math.round(s / 60);
+    const parts = [];
+    if (t.sessions) parts.push(`${t.sessions} session${t.sessions > 1 ? "s" : ""}`);
+    if (t.turns) parts.push(`${t.turns} turn${t.turns > 1 ? "s" : ""} done`);
+    if (t.errors) parts.push(`${t.errors} error${t.errors > 1 ? "s" : ""}`);
+    if (t.working_s >= 60) parts.push(`${mins(t.working_s)}m of Claude working`);
+    if (t.blocked_s >= 30) parts.push(`${mins(Math.max(t.blocked_s, 60))}m of Claude waiting on you`);
+    $("#today").textContent = parts.length
+      ? "since daemon start: " + parts.join(" · ") : "";
+  }
 }
 function hw(cls, msg) {
   const el = $("#hw");
@@ -755,6 +847,7 @@ async function refreshDoctor(keepBanner) {
   const d = await api("/api/doctor");
   if (d.error) return;
   const hookCount = Object.values(d.hooks.events).filter(Boolean).length;
+  const hookTotal = Object.keys(d.hooks.events).length;
   const atLogin = d.login_app ? true : (d.service === null ? null : d.service);
   $("#svcbtn").style.display = d.login_app ? "none" : "";
   $("#checks").innerHTML =
@@ -762,7 +855,8 @@ async function refreshDoctor(keepBanner) {
     checkItem(d.device, "Codex Micro on USB",
               "wired mode: hold the touch control 3s, tap past BLE until white") +
     checkItem(d.daemon, "daemon running", "use ▶ Start daemon below") +
-    checkItem(hookCount === 6, `Claude Code hooks (${hookCount}/6) in ${d.hooks.path}`,
+    checkItem(hookCount === hookTotal,
+              `Claude Code hooks (${hookCount}/${hookTotal}) in ${d.hooks.path}`,
               "click Install hooks, then fully restart Claude Code") +
     checkItem(atLogin,
               d.login_app ? "starts at login via Codexpad.app (keep it in Login Items)"
@@ -831,6 +925,10 @@ $("#trim").onchange = async () => {
   $("#micoff").value = cfg.mic_off_command || "";
   $("#autohand").checked = cfg.auto_handoff !== false;
   $("#autohand").onchange = () => { save(); };
+  $("#focuscmd").value = cfg.focus_command || "";
+  $("#approve").checked = !!cfg.approve_from_pad;
+  $("#approve").onchange = () => { save(); };
+  $("#nagmin").value = cfg.nag_minutes === undefined ? 10 : cfg.nag_minutes;
   $("#commands").value = JSON.stringify(cfg.commands, null, 2);
   $("#cfgpath").textContent = cfg.config_path || "~/.codexpad.json";
   $("#presets").innerHTML = Object.keys(PRESETS)
@@ -904,6 +1002,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send(ask_daemon({"cmd": "pause"}))
         elif self.path == "/api/resume":
             self._send(ask_daemon({"cmd": "resume"}))
+        elif self.path == "/api/hook":
+            # relay for sessions that can't reach the unix socket themselves
+            # (remote/cloud Claude Code over an SSH tunnel): same shape as
+            # notify.py sends, forwarded verbatim. Localhost-only server.
+            state = body.get("state")
+            if not isinstance(state, str):
+                self._send({"error": "need {\"state\": ..., \"cwd\": ...}"})
+            else:
+                ok = tell_daemon({"state": state,
+                                  "cwd": body.get("cwd") or "remote"})
+                self._send({"ok": int(ok)} if ok
+                           else {"error": "daemon not reachable"})
         elif self.path == "/api/mictest":
             # run a mic command once, right now, in the user's session — the
             # page is localhost-only and this is the same trust level as
