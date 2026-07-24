@@ -273,6 +273,25 @@ stale copies of this repo: early drafts like `~/codexpad`, or a nested clone.
 blanks all six; `python -m codexpad.daemon --off` is the one-shot; pressing a
 green or red key clears it.
 
+## One-word launch (no login-app needed)
+
+Where the login app can't get its grant (see Troubleshooting), the reliable
+daily driver is a shell function that starts the daemon via the passwordless
+wrapper — from your granted terminal, the one context that opens the pad —
+and opens the panel. After `install-login.sh` (or the login app) has created
+`/usr/local/bin/codexpad-daemon`:
+
+```bash
+cat >> ~/.zshrc <<'EOF'
+codexpad() { sudo -n /usr/local/bin/codexpad-daemon >> ~/.codexpad.log 2>&1 & (cd ~/codex-micro-for-claude && python -m codexpad.app --no-daemon >/dev/null 2>&1 &); sleep 1; open http://127.0.0.1:8378; }
+EOF
+source ~/.zshrc
+```
+
+Then just type `codexpad`. (It logs to `~/.codexpad.log`, which you own —
+don't point it at the root-owned `/tmp/codexpad.daemon.log`, or the shell
+redirect is denied before sudo runs.)
+
 ## Native app
 
 `./make_login_app.sh "$(which python)"` builds `Codexpad.app` — an icon in
