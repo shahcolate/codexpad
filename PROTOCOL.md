@@ -192,8 +192,9 @@ Control identifiers observed:
 
 All thirteen key identifiers have been exercised individually, and a stated-order pass
 (see `captures/notifications.md`) established the physical map. The Command Keys continue
-the Agent Keys' zero-based index space at 6. The release pattern for `ACT` keys is
-presumed `1` then `0` like the other keys but has not been captured.
+the Agent Keys' zero-based index space at 6. Releases (`act: 0`) are confirmed for the
+mic pair `ACT10`/`ACT11` — hold-to-talk closing on release requires them — and presumed
+identical for the remaining `ACT` keys.
 
 #### Physical map
 
@@ -327,7 +328,7 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | Response chunking | Verified |
 | 61-byte body limit | Verified |
 | `v.oai.hid` schema, `AG00`–`AG05`/`ENC_*` | Verified |
-| `ACT06`–`ACT12` identifiers and physical positions | Verified (stated-order pass); release pattern presumed, not captured |
+| `ACT06`–`ACT12` identifiers and physical positions | Verified (stated-order pass); releases confirmed for `ACT10`/`ACT11`, presumed for the rest |
 | Mic bar = two switches (`ACT10`+`ACT11`) | Verified across ~10 presses |
 | `v.oai.rad` schema and range | Verified |
 | `v.oai.rad` orientation (`a=0` down, counter-clockwise) | Verified — directed flicks plus a four-direction sweep |

@@ -15,8 +15,10 @@ Usage:
     python -m codexpad.daemon           # run the daemon
     python -m codexpad.daemon --test    # cycle key 0 through every state and exit
     python -m codexpad.daemon --off     # turn all keys off and exit
+    python -m codexpad.app              # colours & bindings UI (separate process)
 
-See PROTOCOL.md for the wire format.
+Colours, effects and command bindings come from ~/.codexpad.json (see
+codexpad/config.py for the defaults). See PROTOCOL.md for the wire format.
 """
 import argparse
 import json
@@ -32,6 +34,8 @@ try:
 except ImportError:
     sys.exit("hidapi not installed. Run: pip install hidapi")
 
+from . import config
+
 # --- device ----------------------------------------------------------------
 VID = 0x303A          # Espressif
 PID = 0x8360          # Codex Micro
@@ -40,38 +44,30 @@ CHANNEL = 0x02
 REPORT_LEN = 64
 MAX_BODY = REPORT_LEN - 3   # 61 bytes for JSON + CRLF
 
-SOCK_PATH = os.environ.get("CODEXPAD_SOCK", "/tmp/codexpad.sock")
+SOCK_PATH = config.SOCK_PATH
 NSLOTS = 6
 
 # --- state palette ---------------------------------------------------------
-# (packed 0xRRGGBB, effect, brightness). Effects: 0 off, 1 solid, 2 snake,
-# 3 rainbow, 4 breath, 5 gradient, 6 shallow breath.
-STATES = {
-    "idle":    (0xFFFFFF, 1, 0.35),
-    "working": (0x0000FF, 4, 1.0),
-    "blocked": (0xFF8000, 6, 1.0),
-    "done":    (0x00FF00, 1, 1.0),
-    "error":   (0xFF0000, 1, 1.0),
-    "off":     (0x000000, 0, 0.0),
-}
+# name -> (packed 0xRRGGBB, effect, brightness), built by load_config() from
+# codexpad/config.py defaults overlaid with ~/.codexpad.json. Effects: 0 off,
+# 1 solid, 2 snake, 3 rainbow, 4 breath, 5 gradient, 6 shallow breath.
+STATES = {}
 
 # --- controls ----------------------------------------------------------------
-# Built-in behaviour: an Agent Key press acknowledges a finished (green or red)
-# session back to idle, the dial trims global brightness, and a dial press
+# Built-in behaviour: an Agent Key press acknowledges a finished (green, red
+# or rainbow) key, the dial trims global brightness, and a dial press
 # acknowledges everything finished at once.
 #
 # COMMANDS binds any control to a shell command on top of that, run detached
-# with CODEXPAD_KEY, CODEXPAD_CWD and CODEXPAD_STATE in the environment.
-# Known identifiers (PROTOCOL.md §4.1): AG00-AG05 Agent Keys; ACT06-ACT09
-# Command Keys (lightning, check, cross, fork); ACT12 Codex key;
-# ENC_CW/ENC_CC/ENC_CLK dial; STICK_N/E/S/W flicks; and MIC_ON/MIC_OFF from
-# the mic bar's state machine (ACT10/ACT11 are consumed by it, bind the MIC
-# events instead). The daemon prints the identifier of every press it sees.
-COMMANDS = {
-    # "ACT06":   'open -a "Claude"',
-    # "MIC_ON":  "shortcuts run 'Start Dictation'",
-    # "MIC_OFF": "shortcuts run 'Stop Dictation'",
-}
+# with CODEXPAD_KEY, CODEXPAD_CWD and CODEXPAD_STATE in the environment. It is
+# populated from the "commands" table in ~/.codexpad.json -- edit that with
+# the app (python -m codexpad.app). Known identifiers (PROTOCOL.md §4.1):
+# AG00-AG05 Agent Keys; ACT06-ACT09 Command Keys (lightning, check, cross,
+# fork); ACT12 Codex key; ENC_CW/ENC_CC/ENC_CLK dial; STICK_N/E/S/W flicks;
+# and MIC_ON/MIC_OFF from the mic bar's state machine (ACT10/ACT11 are
+# consumed by it, bind the MIC events instead). The daemon prints the
+# identifier of every press it sees.
+COMMANDS = {}
 
 # --- mic bar -----------------------------------------------------------------
 # The wide mic key sits on two switches and a full press usually fires both,
@@ -82,10 +78,25 @@ COMMANDS = {
 MIC_KEYS = frozenset(("ACT10", "ACT11"))
 MIC_DOUBLE_S = 0.4    # max gap between taps of a double-press
 MIC_HOLD_S = 0.35     # held longer than this = push-to-talk
-MIC_COLOR = 0xFF0000
+MIC_COLOR = [0xFF0000]   # set by load_config()
 
 _mic = {"down": set(), "down_at": 0.0, "last_down": 0.0,
         "latched": False, "open": False}
+
+
+def load_config():
+    """Build the live tables from defaults + ~/.codexpad.json."""
+    cfg = config.load()
+    STATES.clear()
+    STATES.update(config.states_as_tuples(cfg))
+    COMMANDS.clear()
+    COMMANDS.update({k: v for k, v in cfg["commands"].items()
+                     if isinstance(v, str)})
+    MIC_COLOR[0] = config.color_int(cfg["mic_color"])
+    return cfg
+
+
+load_config()
 
 _seq = [0]
 _trim = [1.0]                 # global brightness trim, dial-adjustable 0.1-1.0
@@ -247,7 +258,7 @@ def set_ring(handle, on):
     the mic events still fire -- probe the method and report what it returns.
     """
     if on:
-        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"c": MIC_COLOR}})
+        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"c": MIC_COLOR[0]}})
         _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 1, "b": 1}})
     else:
         _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 0, "b": 0}})
@@ -327,8 +338,8 @@ def dispatch(handle, msg):
             state = _slot_state.get(slot)
         print(f"  press   {key} ({state if state not in (None, 'off') else 'free'})",
               flush=True)
-        if state in ("done", "error"):
-            set_slot(handle, slot, "idle")
+        if state in ("done", "error", "rainbow"):
+            set_slot(handle, slot, "idle" if cwd else "off")
     elif key == "ENC_CW":
         trim(handle, +0.1)
     elif key == "ENC_CC":
@@ -337,9 +348,10 @@ def dispatch(handle, msg):
         print("  press   ENC_CLK (ack all)", flush=True)
         with _lock:
             finished = [s for s, st in _slot_state.items()
-                        if st in ("done", "error")]
+                        if st in ("done", "error", "rainbow")]
+            owned = set(_slots.values())
         for slot in finished:
-            set_slot(handle, slot, "idle")
+            set_slot(handle, slot, "idle" if slot in owned else "off")
     else:
         print(f"  press   {key} (unmapped)", flush=True)
 
@@ -403,6 +415,62 @@ def blank_all(handle):
 
 
 # --- main ------------------------------------------------------------------
+def handle_request(handle, req):
+    """Apply one socket message. Returns a reply dict (sent for cmd messages).
+
+    Two message shapes share the socket: hook updates from notify.py
+    ({"state": ..., "cwd": ...}) and admin commands from the app or nc
+    ({"cmd": "reload" | "preview" | "rainbow" | "off" | "ping"}).
+    """
+    if "cmd" in req:
+        cmd = req["cmd"]
+        if cmd == "ping":
+            pass
+        elif cmd == "reload":
+            load_config()
+            with _lock:
+                lit = [(s, st) for s, st in _slot_state.items()
+                       if st and st != "off" and st in STATES]
+            for slot, state in lit:
+                set_slot(handle, slot, state)   # repaint with the new palette
+            print("  reload  config applied", flush=True)
+        elif cmd == "preview":
+            slot = int(req.get("slot", 0))
+            _rpc(handle, "v.oai.thstatus",
+                 [{"id": slot, "c": config.color_int(req.get("color", "FF00FF"))}])
+            _rpc(handle, "v.oai.thstatus",
+                 [{"id": slot, "e": int(req.get("effect", 1)),
+                   "b": round(float(req.get("brightness", 1.0)) * _trim[0], 2)}])
+            print(f"  preview slot={slot}", flush=True)
+        elif cmd == "rainbow":
+            for i in range(NSLOTS):
+                set_slot(handle, i, "rainbow")
+            print("  rainbow on all six -- press the dial to end the party",
+                  flush=True)
+        elif cmd == "off":
+            blank_all(handle)
+            print("  off     all keys", flush=True)
+        else:
+            return {"error": f"unknown cmd {cmd!r}"}
+        return {"ok": 1}
+
+    state = req.get("state", "idle")
+    cwd = req.get("cwd", "unknown")
+    if state == "end":
+        slot = release(cwd)
+        if slot is not None:
+            set_slot(handle, slot, "off")
+            print(f"  {'end':<7} slot={slot} {cwd}", flush=True)
+    elif state in STATES:
+        slot = slot_for(cwd)
+        set_slot(handle, slot, state)
+        print(f"  {state:<7} slot={slot} {cwd}", flush=True)
+    else:
+        print(f"  ?? unknown state {state!r}", flush=True)
+        return {"error": f"unknown state {state!r}"}
+    return {"ok": 1}
+
+
 def serve(handle):
     if os.path.exists(SOCK_PATH):
         os.unlink(SOCK_PATH)
@@ -413,27 +481,20 @@ def serve(handle):
 
     handle.set_nonblocking(True)
     threading.Thread(target=reader, args=(handle,), daemon=True).start()
-    print(f"codexpad ready on {SOCK_PATH} ({NSLOTS} agent keys)", flush=True)
+    print(f"codexpad ready on {SOCK_PATH} "
+          f"({NSLOTS} agent keys, config {config.CONFIG_PATH})", flush=True)
 
     while True:
         conn, _ = srv.accept()
         try:
             raw = conn.recv(8192).decode()
             req = json.loads(raw) if raw.strip() else {}
-            state = req.get("state", "idle")
-            cwd = req.get("cwd", "unknown")
-
-            if state == "end":
-                slot = release(cwd)
-                if slot is not None:
-                    set_slot(handle, slot, "off")
-                    print(f"  {'end':<7} slot={slot} {cwd}", flush=True)
-            elif state in STATES:
-                slot = slot_for(cwd)
-                set_slot(handle, slot, state)
-                print(f"  {state:<7} slot={slot} {cwd}", flush=True)
-            else:
-                print(f"  ?? unknown state {state!r}", flush=True)
+            reply = handle_request(handle, req)
+            if "cmd" in req:            # notify.py never reads; the app does
+                try:
+                    conn.send(json.dumps(reply).encode())
+                except Exception:
+                    pass
         except Exception as exc:
             print(f"  err {exc}", flush=True)
         finally:

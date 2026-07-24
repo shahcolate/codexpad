@@ -99,6 +99,13 @@ A stick sweep in the same session clustered at `a ≈ 0.01 / 0.24 / 0.49 /
 0.69–0.80` (down / right / up / left), exercising the left region for the
 first time.
 
+### Mic bar releases
+
+Hold-to-talk observed live: `mic ON (hold)` / `mic OFF` pairs tracking the
+finger, and `ON (latched)` / `OFF` pairs on double-presses. Closing on
+release requires `act: 0` notifications from the mic switches, confirming
+that `ACT` keys emit releases (directly shown for `ACT10`/`ACT11`).
+
 ---
 
 ## Analog stick

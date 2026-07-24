@@ -69,6 +69,7 @@ python -m codexpad.daemon --test     # key 0 cycles through all five states
 
 ./install.sh                         # merges hooks into ~/.claude/settings.json
 python -m codexpad.daemon            # leave this running
+python -m codexpad.app               # optional: colours & bindings UI
 ```
 
 Then quit and reopen Claude Code and send a prompt.
@@ -113,19 +114,43 @@ are legal, so it's split. See [`PROTOCOL.md`](PROTOCOL.md) §2.1.
 
 ## Customising
 
-Colours and effects live in `STATES` at the top of `codexpad/daemon.py`:
+Run the app:
 
-```python
-STATES = {
-    "working": (0x0000FF, 4, 1.0),   # (0xRRGGBB, effect, brightness)
-    "blocked": (0xFF8000, 6, 1.0),
+```bash
+python -m codexpad.app               # http://127.0.0.1:8378, localhost only
+```
+
+Colour pickers and effect menus for every state, a live **Try** button that
+paints Agent Key 0, the mic ring colour, your command bindings, and the
+🌈 **Rainbow** button — all six keys run the device's own rainbow effect
+until you press the dial. **Save** writes `~/.codexpad.json` and the daemon
+reloads it on the spot, repainting anything currently lit.
+
+The same file edits by hand:
+
+```json
+{
+  "states": {
+    "working": {"color": "0000FF", "effect": 4, "brightness": 1.0}
+  },
+  "commands": {"MIC_ON": "shortcuts run 'Start Dictation'"},
+  "mic_color": "FF0000"
 }
 ```
 
 Effects: `0` off, `1` solid, `2` snake, `3` rainbow, `4` breath, `5` gradient,
-`6` shallow breath. Colour is packed `0xRRGGBB` — verified, no byte swap.
+`6` shallow breath. Colours are `RRGGBB` — verified, no byte swap. Defaults
+live in `codexpad/config.py`; anything you don't override keeps its default.
 
-Try a colour without editing anything:
+The daemon's socket also takes commands directly, no app needed:
+
+```bash
+printf '{"cmd":"rainbow"}' | nc -U /tmp/codexpad.sock    # party
+printf '{"cmd":"off"}'     | nc -U /tmp/codexpad.sock
+printf '{"cmd":"reload"}'  | nc -U /tmp/codexpad.sock    # re-read the config
+```
+
+Try a colour with no daemon at all:
 
 ```bash
 python tools/probe.py color 0 FF00FF
@@ -149,14 +174,15 @@ and acts on them:
 
 An amber key can't be answered from the pad — Claude Code has no remote
 approval interface — so it stays amber until you respond in the app. What a
-press *can* do is run something of yours. `COMMANDS` in `codexpad/daemon.py`
-binds any control identifier to a shell command:
+press *can* do is run something of yours. The `commands` table in
+`~/.codexpad.json` — or the Command bindings box in the app — binds any
+control identifier to a shell command:
 
-```python
-COMMANDS = {
-    "ACT06":   'open -a "Claude"',    # first Command Key focuses the app
-    "ENC_CLK": "say all clear",
-    "STICK_N": "say up",
+```json
+"commands": {
+  "ACT06":   "open -a 'Claude'",
+  "ENC_CLK": "say all clear",
+  "STICK_N": "say up"
 }
 ```
 
@@ -178,10 +204,10 @@ logical key. **Hold it** and the mic is open for exactly the hold;
 closing fire `MIC_ON` and `MIC_OFF` — the daemon has no microphone of its
 own, so bind them to your dictation tool:
 
-```python
-COMMANDS = {
-    "MIC_ON":  "shortcuts run 'Start Dictation'",
-    "MIC_OFF": "shortcuts run 'Stop Dictation'",
+```json
+"commands": {
+  "MIC_ON":  "shortcuts run 'Start Dictation'",
+  "MIC_OFF": "shortcuts run 'Stop Dictation'"
 }
 ```
 
@@ -265,7 +291,7 @@ substitution — if Work Louder or OpenAI ship an official SDK, use that instead
 - [x] Confirm the stick's angle orientation — `a=0` down, counter-clockwise (PROTOCOL.md §4.2)
 - [ ] Session navigation on the joystick — flicks fire, but nothing consumes them yet
 - [ ] Characterise `v.oai.rgbcfg` — first live use is the mic ring indicator; needs a hardware report
-- [ ] Capture the `ACT` key release pattern (the mic bar's hold mode presumes `1`/`0`)
+- [x] Confirm `ACT` key releases — hold-to-talk closes on release, so `act: 0` arrives (mic pair, directly)
 - [ ] Linux and Windows testing — currently macOS only
 - [ ] Reconcile with the vendor's own layer system so Codex and Claude coexist
 
