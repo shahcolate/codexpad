@@ -11,7 +11,7 @@ Blue while Claude works · amber when it needs you · green when it's done
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Linux-lightgrey)
-[![Protocol](https://img.shields.io/badge/protocol-documented%20%26%20verified-C96442)](PROTOCOL.md)
+[![Protocol](https://img.shields.io/badge/protocol-documented%20%C2%B7%20status%20tagged-C96442)](PROTOCOL.md)
 
 <img src="docs/demo.gif" width="720" alt="The codexpad control panel mirroring live session states on the pad"><br>
 <sub>The control panel mirroring a working session, a blocked approval, a finished run, the mic opening, and rainbow mode.</sub>
@@ -148,19 +148,32 @@ or `~/.codexpad.json`), executed with `CODEXPAD_KEY`, `CODEXPAD_CWD` and
 **The mic bar is a trigger, not a microphone**: two switches folded into one
 logical key. Hold it and it's open for exactly the hold; double-press
 latches until the next double-press. The ambient ring lights red while open
-(colour configurable) — confirmed on hardware, the first characterisation of
-the device's `v.oai.rgbcfg` zone lighting. If the daemon runs as root, your
-bindings run as root too — keep them to things you'd sudo anyway.
+(`mic_color`) — confirmed on hardware: `v.oai.rgbcfg`'s `ambient` zone takes
+the same split partial updates as the key lighting, with `c`, `e` and `b`
+behaving as documented. That is one zone, three fields and one effect value,
+observed at one colour; the `keys` zone, `s`/`m` and every non-solid effect
+are untested (PROTOCOL.md §5.3). If the daemon runs as root, your bindings
+run as root too — keep them to things you'd sudo anyway.
 
 ## Claude or Codex — the handoff
 
-The deepest thing hardware testing taught us: **the transport is the
-ownership switch.** The ChatGPT app drives the pad over *Bluetooth*;
-codexpad drives it over *USB* — and the pad is only ever on one. The
-front-left touch control physically hands the pad between your two AI
-stacks: **blue ring = Codex, white ring = Claude.** A lingering Bluetooth
-bond keeps yanking the pad back to BLE, so Forget it in Bluetooth settings
-while you want it wired.
+The single most useful thing hardware testing taught us: **check the
+transport first.** What was observed here, repeatedly, on one pad and one
+Mac: with a Bluetooth bond in place the pad kept returning to BLE, where it
+drove the ChatGPT app happily while being *completely absent from the USB
+bus* — `system_profiler` empty, nothing for codexpad to open. Wired mode
+only held after the pairing was forgotten on the host. So if you're running
+both stacks: **Forget the pad in Bluetooth settings while you want it
+wired**, and use the ring colour as your mode tell — blue is BLE, white is
+wired.
+
+Two caveats, because this is the part most likely to be a quirk of that
+setup rather than the device: we never tested whether the ChatGPT app can
+*also* drive the pad over USB (it may well — that would make "blue = Codex,
+white = Claude" a property of our configuration, not a design), and we never
+tried to hold a USB and a BLE host at once, so "one bus at a time" is what
+we saw, not something we established. If you've run either experiment,
+[open an issue](../../issues) — it settles the question.
 
 Within USB there's also a soft handoff — **⇆ Hand pad to Codex** in the
 panel (or `{"cmd":"pause"}` on the socket) blanks codexpad's lights and
@@ -183,8 +196,9 @@ Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
 ```
 
 Effects: `0` off, `1` solid, `2` snake, `3` rainbow, `4` breath, `5`
-gradient, `6` shallow breath. Colours are `RRGGBB` — verified, no byte
-swap. The daemon's socket takes commands directly: `rainbow`, `off`,
+gradient, `6` shallow breath — `1` is confirmed on hardware, the rest come
+from the vendor client's enumeration and haven't each been exercised.
+Colours are `RRGGBB` — verified, no byte swap. The daemon's socket takes commands directly: `rainbow`, `off`,
 `reload`, `pause`, `resume`, `status`, `trim`, e.g.
 `printf '{"cmd":"rainbow"}' | nc -U /tmp/codexpad.sock`.
 
@@ -223,10 +237,17 @@ the pad's identical HID-over-GATT identity on Bluetooth. Two firmware
 observations were reported to Work Louder before publication (§7). No
 vendor code is included or redistributed; the goal is interoperability.
 
+All of it is one device, one host and firmware `v0.4.1`, so read §6's status
+column before relying on a claim: it separates what was exercised from what
+is documented-but-untested or inferred, and the untested list is not short.
+`tools/probe.py` exists so you can promote a row against your own pad.
+
 ## Field guide
 
-Hard-won, all reproduced on real hardware. Start with the transport — most
-"broken" states are the pad being on the wrong bus:
+Every symptom and fix below was hit and cleared on real hardware; the middle
+column is our best explanation of *why*, which is interpretation rather than
+something we instrumented. Start with the transport — most "broken" states
+are the pad being on the wrong bus:
 
 | Symptom | It means | Fix |
 |---|---|---|
