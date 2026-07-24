@@ -33,6 +33,9 @@ what makes the mapping work without any session bookkeeping.
 
 The amber is the one that earns the hardware. Everything else is decoration.
 
+The keys press back, too: a green or red key acknowledges its session, and the
+dial trims brightness — see [The buttons](#the-buttons).
+
 ---
 
 ## Requirements
@@ -83,7 +86,9 @@ file first. If you prefer to do it by hand, copy
 Claude Code hook  ──stdin JSON──▶  notify.py
                                        │  unix socket
                                        ▼
-                                   daemon.py  ──vendor HID──▶  Codex Micro
+                                   daemon.py  ──lighting──▶  Codex Micro
+                                       ▲                         │
+                                       └── key / dial presses ───┘
 ```
 
 Three deliberate choices:
@@ -92,9 +97,13 @@ Three deliberate choices:
   slow and races against itself.
 - **`notify.py` never fails.** Every error is swallowed, so a dead daemon or an
   unplugged pad can't break a Claude Code turn.
-- **The daemon never reads from the device.** Key-press notifications share
-  report ID `0x06` with RPC replies, so a reader here would corrupt response
-  reassembly. Lighting calls are idempotent; dropping the ack costs nothing.
+- **The daemon never reassembles replies.** Notifications and RPC replies
+  share report ID `0x06`, which is what makes naive reading dangerous
+  ([`PROTOCOL.md`](PROTOCOL.md) §2.2). The reader thread exploits an
+  asymmetry instead: every notification fits one report and parses standalone,
+  while fragments of a chunked reply never do — so anything that doesn't parse
+  alone is dropped, not accumulated. Lighting calls are idempotent and their
+  acks carry nothing; RPC that needs replies lives in `probe.py`.
 
 Two frames go out per state change, because a fully-populated lighting object
 with an 8-digit decimal colour exceeds the 61-byte body limit. Partial updates
@@ -121,6 +130,41 @@ Try a colour without editing anything:
 ```bash
 python tools/probe.py color 0 FF00FF
 ```
+
+---
+
+## The buttons
+
+Lighting is half the loop. The daemon also reads the device's notifications
+and acts on them:
+
+| Control | Built-in action |
+|---|---|
+| Agent Key | acknowledge that session — a green or red key returns to dim idle |
+| Dial rotate | brightness trim for the whole pad, one step per detent |
+| Dial press | acknowledge everything finished at once |
+
+An amber key can't be answered from the pad — Claude Code has no remote
+approval interface — so it stays amber until you respond in the app. What a
+press *can* do is run something of yours. `COMMANDS` in `codexpad/daemon.py`
+binds any control identifier to a shell command:
+
+```python
+COMMANDS = {
+    "AG00":    'open -a "Claude"',    # key 0 focuses the app
+    "ENC_CLK": "say all clear",
+}
+```
+
+Commands run detached with `CODEXPAD_KEY`, `CODEXPAD_CWD` and `CODEXPAD_STATE`
+in the environment, so a binding knows which session's key was pressed and
+what state it was in. The daemon prints the identifier of every press it sees
+— press a control, read the log, bind it. That is also how to find the
+Command Key identifiers, which aren't captured in `PROTOCOL.md` yet (§4.1);
+if you capture one, open an issue.
+
+The analog stick streams `v.oai.rad` continuously and is deliberately ignored
+for now — see the roadmap.
 
 ---
 
@@ -152,6 +196,11 @@ hooks on the remote machine, which can't reach a socket on yours.
 **Two sessions share a key.** Only six keys exist; a seventh session evicts the
 least recently used.
 
+**Presses do nothing.** The daemon prints every press it receives. If no
+`press` lines appear, the device isn't reaching the reader — wrong mode, or
+another process holds the handle. If presses print but nothing changes, that's
+expected for keys that aren't green or red; bind them via `COMMANDS`.
+
 ---
 
 ## Protocol work
@@ -179,7 +228,7 @@ substitution — if Work Louder or OpenAI ship an official SDK, use that instead
 ## Roadmap
 
 - [ ] Remove the `sudo` requirement with a documented Input Monitoring setup
-- [ ] Bind Command Keys to Claude Code actions (capture their `k` identifiers first)
+- [ ] Capture the Command Key `k` identifiers — `COMMANDS` can bind them the moment they're known
 - [ ] Use the joystick's analog `v.oai.rad` output for session navigation
 - [ ] Characterise `v.oai.rgbcfg` for the ambient ring
 - [ ] Linux and Windows testing — currently macOS only
