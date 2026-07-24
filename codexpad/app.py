@@ -486,7 +486,7 @@ it needs you, green when it's done.</p>
 </div>
 
 <footer>Unofficial, unaffiliated, MIT. Every protocol claim is status-tagged
-in <a href="https://github.com/shahcolate/codex-micro-for-claude/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</footer>
+in <a href="https://github.com/shahcolate/codexpad/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</footer>
 
 <script>
 // ids the firmware disagrees with on real keys: 2/5 do nothing, 3 = solid red
