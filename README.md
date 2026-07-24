@@ -228,15 +228,17 @@ Input Monitoring. `sudo ./service.sh remove` to uninstall. After running
 under plain `sudo`, clean up with `sudo rm -f /tmp/codexpad.sock` (the
 daemon says so when this is the issue).
 
-**Device doesn't enumerate.** BLE mode (USB charges but doesn't enumerate) or
-a charge-only cable. See wired mode above. **The tells:** the pad flashes
-blue when unplugged (BLE advertising), and — the definitive one — **it
-lights up the moment you open the ChatGPT app while `system_profiler
-SPUSBDataType` shows nothing**: that's the vendor app driving it over
-Bluetooth. Quit the ChatGPT app, Forget the pad in System Settings →
-Bluetooth, then switch to wired; an existing BLE bond keeps pulling the pad
-back to Bluetooth otherwise. A running daemon reconnects and repaints by
-itself once the pad is back in wired mode.
+**Device doesn't enumerate — or enumerates but won't open.** Run
+`python tools/probe.py enumerate` and read the bus tag: the pad exposes the
+same HID identity over Bluetooth as over USB, so it can appear in the list
+while being `[BLUETOOTH]` — a state where codexpad cannot drive it and the
+pad "only works when the ChatGPT app opens". The fix: quit the ChatGPT app,
+Forget the pad in System Settings → Bluetooth (or turn Bluetooth off),
+power-cycle the pad, then hold the touch control 3s and tap until the ring
+is **white**; confirm with `[USB]` in enumerate. Other tells: it flashes
+blue when unplugged (BLE advertising), falls back to BLE after power loss,
+and charge-only cables mimic all of this. A running daemon reconnects and
+repaints by itself once the pad is truly wired.
 
 **Hooks don't fire.** Run `/hooks` inside Claude Code — your events should be
 listed with source `User`. If not, fully quit and reopen the app. Desktop:

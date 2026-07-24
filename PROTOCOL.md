@@ -62,6 +62,14 @@ and reconnects — the vendor's ChatGPT client drives it over Bluetooth, so the 
 reliably only after the Bluetooth pairing is removed on the host. The transport is
 therefore also the ownership switch: one host stack at a time, selected physically.
 
+**In BLE mode the pad is still an HID device** — HID over GATT, same `0x303a:0x8360`
+identity and the same six collections, so `hid.enumerate()` lists it identically on
+either transport. Enumeration alone therefore cannot distinguish wired from BLE;
+check `bus_type` (hidapi ≥ 0.13, surfaced by `tools/probe.py enumerate`) or the USB
+bus itself (`system_profiler SPUSBDataType` on macOS). The vendor-protocol traffic in
+this document was captured on USB; behaviour over the BLE HID transport has not been
+characterised.
+
 ### 1.3 Host permissions (macOS)
 
 Because the device exposes a Keyboard collection, macOS gates opening it behind

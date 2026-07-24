@@ -52,16 +52,28 @@ def decode(report):
     return bytes(report[3:3 + length]).decode("utf-8", "replace")
 
 
+BUS = {0: "unknown", 1: "USB", 2: "BLUETOOTH", 3: "I2C", 4: "SPI"}
+
+
 def cmd_enumerate():
     rows = [d for d in hid.enumerate() if (d["vendor_id"], d["product_id"]) == (VID, PID)]
     if not rows:
-        print("Codex Micro not found on USB.")
+        print("Codex Micro not found.")
         print("Is it in WIRED mode? In BLE mode, USB charges but does not enumerate.")
         return
+    buses = set()
     for d in rows:
+        bus = BUS.get(d.get("bus_type", 0), str(d.get("bus_type")))
+        buses.add(bus)
         print(f"{d['vendor_id']:#06x}:{d['product_id']:#06x} "
               f"page={d['usage_page']:#06x} usage={d['usage']:#06x} "
-              f"iface={d['interface_number']} :: {d['product_string']}")
+              f"iface={d['interface_number']} :: {d['product_string']} [{bus}]")
+    if "BLUETOOTH" in buses:
+        print()
+        print("!! The pad is connected over BLUETOOTH, not USB. codexpad needs")
+        print("!! wired mode: quit the ChatGPT app, Forget/disconnect the pad in")
+        print("!! Bluetooth settings (or turn Bluetooth off), power-cycle the pad,")
+        print("!! then hold the touch control 3s and tap until the ring is WHITE.")
 
 
 def cmd_listen():
