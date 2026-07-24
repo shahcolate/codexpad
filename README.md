@@ -216,17 +216,22 @@ relaunch the terminal. If `python tools/probe.py enumerate` lists the
 device, it's this permission — not the cable, and not another app "holding"
 it. Stubborn cases: reboot, or `tccutil reset ListenEvent` and re-grant.
 
-**If macOS still won't grant it**, skip the fight — install the daemon as a
-root system service instead (root bypasses the check entirely):
+**If macOS won't grant it to python no matter what** (observed in the wild:
+user process denied, root LaunchDaemon denied, while the ChatGPT *app*
+opens the same pad happily) — make the daemon an app, which TCC respects:
 
 ```bash
-sudo ./service.sh "$(which python)"
+./make_login_app.sh "$(which python)"
 ```
 
-Starts at boot, restarts if it dies, waits for the pad, no terminal, no
-Input Monitoring. `sudo ./service.sh remove` to uninstall. After running
-under plain `sudo`, clean up with `sudo rm -f /tmp/codexpad.sock` (the
-daemon says so when this is the issue).
+builds `~/Applications/Codexpad.app` (ad-hoc signed, no Dock icon) that
+just runs the daemon. Grant **it** Input Monitoring, add it to Login
+Items, done: starts at login, no terminal, survives replugs. Alternatives
+that work on some setups: `sudo ./service.sh "$(which python)"` installs a
+root LaunchDaemon (`sudo ./service.sh remove` to undo), and plain
+`sudo python -m codexpad.daemon` always works from a granted terminal.
+After sudo runs, clean up with `sudo rm -f /tmp/codexpad.sock` (the daemon
+says so when this is the issue).
 
 **Device doesn't enumerate — or enumerates but won't open.** Run
 `python tools/probe.py enumerate` and read the bus tag: the pad exposes the
