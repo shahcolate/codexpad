@@ -72,9 +72,32 @@ physical-position ↔ identifier mapping is not established by this capture,
 and releases (`act: 0`) are filtered by the daemon and were not recorded.
 
 A second pass again began `ACT06 ACT07 ACT08 ACT09`, but the remaining three
-arrived `ACT11 ACT10 ACT12` where the first pass gave `ACT12 ACT11 ACT10` —
-that's press order, not layout. The physical mapping stays unrecorded until
-someone presses the keys in a stated order.
+arrived in a different order — press order, not layout. The mapping was then
+settled by the stated-order pass below.
+
+### Physical map (stated-order pass)
+
+Each control pressed several times in a stated order, top row to bottom,
+left to right, watching the daemon's log:
+
+```
+Dial rotate            -> trim (ENC_CW / ENC_CC)
+Dial press             -> ENC_CLK
+Row 1 keys, l-to-r     -> AG00, AG01
+Row 2 keys, l-to-r     -> AG02, AG03, AG04, AG05
+Row 3 ⚡ ✓ ✗ ⑂          -> ACT06, ACT07, ACT08, ACT09
+Mic bar (~10 presses)  -> ACT10/ACT11 in pairs, one lone ACT10
+Codex key              -> ACT12
+Mode touch control     -> nothing, as previously observed
+```
+
+The mic bar log alternated `ACT10, ACT11, ACT10, ACT11 …` with a single
+unpaired `ACT10` — a wide cap over two switches, both usually firing, one
+missable on an off-centre press.
+
+A stick sweep in the same session clustered at `a ≈ 0.01 / 0.24 / 0.49 /
+0.69–0.80` (down / right / up / left), exercising the left region for the
+first time.
 
 ---
 

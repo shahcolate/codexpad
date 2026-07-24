@@ -190,11 +190,34 @@ Control identifiers observed:
 | `ENC_CC` | Dial, counter-clockwise detent | `2` per detent |
 | `ENC_CLK` | Dial press | `1` then `0` |
 
-All six Agent Key identifiers have now been exercised individually. The seven Command
-Keys emit `ACT06`–`ACT12`, continuing the Agent Keys' zero-based index space at 6; all
-seven identifiers were observed as press notifications, but which physical key carries
-which identifier was not recorded, and the release pattern (presumed `1` then `0` like
-the other keys) was not captured. See `captures/notifications.md`.
+All thirteen key identifiers have been exercised individually, and a stated-order pass
+(see `captures/notifications.md`) established the physical map. The Command Keys continue
+the Agent Keys' zero-based index space at 6. The release pattern for `ACT` keys is
+presumed `1` then `0` like the other keys but has not been captured.
+
+#### Physical map
+
+Four rows, top to bottom, positions left to right:
+
+| Position | Control | Identifier(s) |
+|---|---|---|
+| Row 1, far left | Dial — rotate / press | `ENC_CW` `ENC_CC` / `ENC_CLK` |
+| Row 1, keys 2–3 | Agent Keys | `AG00` `AG01` |
+| Row 1, far right | Analog stick | `v.oai.rad` (§4.2) |
+| Row 2, all four keys | Agent Keys | `AG02` `AG03` `AG04` `AG05` |
+| Row 3, all four keys | Command Keys ⚡ ✓ ✗ ⑂ | `ACT06` `ACT07` `ACT08` `ACT09` |
+| Row 4, far left | Mode touch control | none — emits no notification |
+| Row 4, wide key | Mic bar | `ACT10` **and** `ACT11` |
+| Row 4, far right | Codex key | `ACT12` |
+
+**The mic bar sits on two switches.** A full press usually emits `ACT10` and `ACT11`
+together (ordering not fixed); an off-centre press can emit only one. Hosts should fold
+the pair into one logical key.
+
+For interoperability reference, the vendor client's default Command Key actions are:
+⚡ toggles Fast mode, ✓ approves the current request, ✗ declines it, ⑂ continues the
+chat in a new chat, the mic bar starts push-to-talk, and the Codex key sends the
+composer message. These are host-side bindings, not device behaviour.
 
 The front-left touch control produces no notification — layer cycling appears to be
 handled entirely in firmware.
@@ -216,8 +239,9 @@ UI are a host-side interpretation, not a device limitation.
 
 **Orientation.** Directed flicks establish the zero point: `a` is `0.0` with the stick
 pushed down (toward the user) and increases **counter-clockwise** — right ≈ `0.25`,
-up ≈ `0.5`. Observed: up `0.49`, right `0.24`, down `0.93` (slightly off-axis). Left
-(`0.75`) is inferred by symmetry and has not been exercised.
+up ≈ `0.5`, left ≈ `0.75`. Observed: up `0.49`, right `0.24`, down `0.93` (slightly
+off-axis); a later four-direction sweep clustered at `0.01` / `0.24` / `0.49` /
+`0.69`–`0.80`, exercising the left region and completing the circle.
 
 ---
 
@@ -269,8 +293,10 @@ Configures the two lighting zones: `ambient` (outer ring) and `keys` (under-keyc
 backlight). Each zone takes `e` (effect), `b` (brightness), `s` (speed), `c` (colour) and
 `m` (an additional effect parameter of undetermined meaning).
 
-Not yet exercised on hardware. Given the 61-byte body limit, a two-zone update is
-unlikely to fit in a single frame.
+Given the 61-byte body limit, a two-zone update cannot fit in a single frame. codexpad's
+mic indicator now sends single-zone partial updates to `ambient` (an `{"c": …}` frame
+followed by `{"e": …, "b": …}`, mirroring the §5.1 split) — whether the device accepts
+partial zone objects, and the zone effect encoding, remain unconfirmed on hardware.
 
 ### 5.4 Other methods
 
@@ -301,9 +327,10 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | Response chunking | Verified |
 | 61-byte body limit | Verified |
 | `v.oai.hid` schema, `AG00`–`AG05`/`ENC_*` | Verified |
-| `ACT06`–`ACT12` Command Key identifiers | Observed; physical mapping and release pattern not recorded |
+| `ACT06`–`ACT12` identifiers and physical positions | Verified (stated-order pass); release pattern presumed, not captured |
+| Mic bar = two switches (`ACT10`+`ACT11`) | Verified across ~10 presses |
 | `v.oai.rad` schema and range | Verified |
-| `v.oai.rad` orientation (`a=0` down, counter-clockwise) | Verified for down/up/right; left inferred |
+| `v.oai.rad` orientation (`a=0` down, counter-clockwise) | Verified — directed flicks plus a four-direction sweep |
 | `v.oai.thstatus` accepted, returns `{"ok":1}` | Verified |
 | Colour is `0xRRGGBB` | Verified |
 | Effect `1` = solid | Verified |
@@ -311,7 +338,7 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | Effects `0`, `2`–`6` | Documented, not individually tested |
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
 | `AG02`–`AG05` identifiers | Inferred from pattern |
-| `v.oai.rgbcfg` | Not tested |
+| `v.oai.rgbcfg` | Sent live (mic ring indicator); acceptance and effect unconfirmed |
 | `fs.*`, `sys.*`, `host.*`, `mp.*` behaviour | Names only |
 | Outbound chunking mechanism | Unknown |
 

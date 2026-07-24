@@ -8,7 +8,8 @@ writes lighting commands to the device over vendor HID.
 Input flows back too: a reader thread dispatches the device's own notifications.
 Pressing an Agent Key acknowledges a finished session, the dial trims brightness
 and clears the board, stick pushes become one-shot STICK_N/E/S/W flick events,
-and COMMANDS binds any control to a shell command.
+the mic bar is a hold-to-talk / double-press-to-latch toggle with MIC_ON and
+MIC_OFF hooks, and COMMANDS binds any control to a shell command.
 
 Usage:
     python -m codexpad.daemon           # run the daemon
@@ -61,14 +62,30 @@ STATES = {
 #
 # COMMANDS binds any control to a shell command on top of that, run detached
 # with CODEXPAD_KEY, CODEXPAD_CWD and CODEXPAD_STATE in the environment.
-# Known identifiers (PROTOCOL.md §4.1): AG00-AG05 Agent Keys, ACT06-ACT12
-# Command Keys, ENC_CW/ENC_CC/ENC_CLK dial, and the synthetic STICK_N/E/S/W
-# flick events. The daemon prints the identifier of every press it sees.
+# Known identifiers (PROTOCOL.md §4.1): AG00-AG05 Agent Keys; ACT06-ACT09
+# Command Keys (lightning, check, cross, fork); ACT12 Codex key;
+# ENC_CW/ENC_CC/ENC_CLK dial; STICK_N/E/S/W flicks; and MIC_ON/MIC_OFF from
+# the mic bar's state machine (ACT10/ACT11 are consumed by it, bind the MIC
+# events instead). The daemon prints the identifier of every press it sees.
 COMMANDS = {
     # "ACT06":   'open -a "Claude"',
-    # "ENC_CLK": "say all clear",
-    # "STICK_N": "say up",
+    # "MIC_ON":  "shortcuts run 'Start Dictation'",
+    # "MIC_OFF": "shortcuts run 'Stop Dictation'",
 }
+
+# --- mic bar -----------------------------------------------------------------
+# The wide mic key sits on two switches and a full press usually fires both,
+# so ACT10 and ACT11 fold into one logical key. Hold it to keep the mic open
+# for the hold; double-press to latch it open until the next double-press.
+# Opening and closing fire MIC_ON / MIC_OFF (bind those in COMMANDS -- the
+# daemon has no microphone of its own) and light the ambient ring red.
+MIC_KEYS = frozenset(("ACT10", "ACT11"))
+MIC_DOUBLE_S = 0.4    # max gap between taps of a double-press
+MIC_HOLD_S = 0.35     # held longer than this = push-to-talk
+MIC_COLOR = 0xFF0000
+
+_mic = {"down": set(), "down_at": 0.0, "last_down": 0.0,
+        "latched": False, "open": False}
 
 _seq = [0]
 _trim = [1.0]                 # global brightness trim, dial-adjustable 0.1-1.0
@@ -221,6 +238,72 @@ def flick(a, d):
             run_command(name, None, None)
 
 
+def set_ring(handle, on):
+    """Light the ambient ring as the mic indicator.
+
+    v.oai.rgbcfg is uncharacterised (PROTOCOL.md §5.3) and this is its first
+    live use: single-zone partial updates, split across two frames like
+    set_slot to fit the 61-byte body, fire and forget. If the ring stays dark
+    the mic events still fire -- probe the method and report what it returns.
+    """
+    if on:
+        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"c": MIC_COLOR}})
+        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 1, "b": 1}})
+    else:
+        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 0, "b": 0}})
+
+
+def _mic_set(handle, is_open, how):
+    if _mic["open"] == is_open:
+        return
+    _mic["open"] = is_open
+    print(f"  mic     {f'ON ({how})' if is_open else 'OFF'}", flush=True)
+    set_ring(handle, is_open)
+    name = "MIC_ON" if is_open else "MIC_OFF"
+    if name in COMMANDS:
+        run_command(name, None, None)
+
+
+def _mic_hold_check(handle):
+    with _lock:
+        if _mic["down"] and not _mic["latched"] and not _mic["open"]:
+            _mic_set(handle, True, "hold")
+
+
+def mic_event(handle, key, act):
+    """Fold ACT10/ACT11 into one logical key and run the mic state machine.
+
+    Relies on release notifications (act 0), whose pattern for ACT keys is
+    presumed from the other keys but not yet captured -- if holds never
+    close, that presumption is wrong and this needs a timeout fallback.
+    """
+    with _lock:
+        now = time.time()
+        if act != 0:                      # press; tolerate a stray act=2
+            first = not _mic["down"]
+            _mic["down"].add(key)
+            if not first:
+                return                    # other switch of the same press
+            if now - _mic["last_down"] <= MIC_DOUBLE_S:
+                if _mic["latched"]:
+                    _mic["latched"] = False
+                    _mic_set(handle, False, "")
+                else:
+                    _mic["latched"] = True
+                    _mic_set(handle, True, "latched")
+            elif not _mic["latched"]:
+                threading.Timer(MIC_HOLD_S, _mic_hold_check, (handle,)).start()
+            _mic["last_down"] = now
+            _mic["down_at"] = now
+        else:                             # release
+            _mic["down"].discard(key)
+            if _mic["down"]:
+                return                    # other switch still down
+            if (_mic["open"] and not _mic["latched"]
+                    and now - _mic["down_at"] >= MIC_HOLD_S):
+                _mic_set(handle, False, "")
+
+
 def dispatch(handle, msg):
     """Turn one device notification into an action (PROTOCOL.md §4.1)."""
     params = msg.get("p") or {}
@@ -230,8 +313,11 @@ def dispatch(handle, msg):
     if msg.get("m") != "v.oai.hid":
         return
     key, act = params.get("k", "?"), params.get("act")
+    if key in MIC_KEYS:
+        mic_event(handle, key, act)
+        return
     if act == 0:
-        return          # releases carry no meaning here
+        return          # releases only matter to the mic bar
 
     cwd = state = None
     if key.startswith("AG") and key[2:].isdigit() and int(key[2:]) < NSLOTS:

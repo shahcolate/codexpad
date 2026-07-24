@@ -143,7 +143,8 @@ and acts on them:
 | Agent Key (`AG00`–`AG05`) | acknowledge that session — a green or red key returns to dim idle |
 | Dial rotate (`ENC_CW`/`ENC_CC`) | brightness trim for the whole pad, one step per detent |
 | Dial press (`ENC_CLK`) | acknowledge everything finished at once |
-| Command Keys (`ACT06`–`ACT12`) | nothing built in — bind them below |
+| Command Keys (`ACT06`–`ACT09` ⚡✓✗⑂, `ACT12` Codex) | nothing built in — bind them below |
+| Mic bar (`ACT10`+`ACT11`) | hold = push-to-talk, double-press = latch; fires `MIC_ON`/`MIC_OFF` |
 | Stick flick (`STICK_N/E/S/W`) | nothing built in — bind them below |
 
 An amber key can't be answered from the pad — Claude Code has no remote
@@ -166,10 +167,30 @@ what state it was in. The daemon prints the identifier of every press it sees
 
 The analog stick streams `v.oai.rad` continuously, so the daemon quantises it:
 a hard push fires a single `STICK_N/E/S/W` flick and re-arms once the stick
-recentres. Orientation was established with directed flicks on hardware
-(PROTOCOL.md §4.2): `a` is zero pushing down and increases counter-clockwise,
-so up is `0.5`. The west bucket is the one part inferred rather than observed
-— if a left push doesn't print `STICK_W`, open an issue with the logged angle.
+recentres. Orientation was established on hardware (PROTOCOL.md §4.2): `a` is
+zero pushing down and increases counter-clockwise, so up is `0.5`.
+
+### The mic bar
+
+The wide mic key sits on two switches (`ACT10`/`ACT11`), folded into one
+logical key. **Hold it** and the mic is open for exactly the hold;
+**double-press** and it latches open until the next double-press. Opening and
+closing fire `MIC_ON` and `MIC_OFF` — the daemon has no microphone of its
+own, so bind them to your dictation tool:
+
+```python
+COMMANDS = {
+    "MIC_ON":  "shortcuts run 'Start Dictation'",
+    "MIC_OFF": "shortcuts run 'Stop Dictation'",
+}
+```
+
+While the mic is open the daemon lights the ambient ring red. The ring is
+driven by `v.oai.rgbcfg`, which PROTOCOL.md §5.3 still lists as
+uncharacterised — this is its first live use. If your ring stays dark, the
+mic events still fire; run
+`python tools/probe.py call v.oai.rgbcfg '{"ambient":{"e":1,"b":1}}'` and
+open an issue with the reply so the method can be documented properly.
 
 ---
 
@@ -240,10 +261,11 @@ substitution — if Work Louder or OpenAI ship an official SDK, use that instead
 ## Roadmap
 
 - [ ] Remove the `sudo` requirement with a documented Input Monitoring setup
-- [x] Capture the Command Key `k` identifiers — `ACT06`–`ACT12`, see PROTOCOL.md §4.1
-- [x] Confirm the stick's angle orientation — `a=0` down, counter-clockwise; west still inferred (PROTOCOL.md §4.2)
+- [x] Capture the Command Key `k` identifiers — `ACT06`–`ACT12`, physically mapped (PROTOCOL.md §4.1)
+- [x] Confirm the stick's angle orientation — `a=0` down, counter-clockwise (PROTOCOL.md §4.2)
 - [ ] Session navigation on the joystick — flicks fire, but nothing consumes them yet
-- [ ] Characterise `v.oai.rgbcfg` for the ambient ring
+- [ ] Characterise `v.oai.rgbcfg` — first live use is the mic ring indicator; needs a hardware report
+- [ ] Capture the `ACT` key release pattern (the mic bar's hold mode presumes `1`/`0`)
 - [ ] Linux and Windows testing — currently macOS only
 - [ ] Reconcile with the vendor's own layer system so Codex and Claude coexist
 
