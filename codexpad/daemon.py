@@ -34,6 +34,7 @@ try:
 except ImportError:
     sys.exit("hidapi not installed. Run: pip install hidapi")
 
+from . import __version__ as VERSION
 from . import config
 
 # --- device ----------------------------------------------------------------
@@ -521,6 +522,7 @@ def serve(handle):
             req = json.loads(raw) if raw.strip() else {}
             reply = handle_request(handle, req)
             if "cmd" in req:            # notify.py never reads; the app does
+                reply["v"] = VERSION    # lets the app spot a stale daemon
                 try:
                     conn.send(json.dumps(reply).encode())
                 except Exception:

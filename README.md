@@ -276,6 +276,15 @@ now detects this and says so); or the daemon runs under `sudo` and loaded
 root's config instead of yours (fixed — root now resolves `SUDO_USER`'s
 home). The Setup card's checklist shows device/daemon/hooks state live.
 
+**A key lights up on its own while the app runs, or the app says the daemon
+is unreachable while one is clearly running.** You're running a stale daemon
+build — old daemons misread app commands as hook messages (the app's status
+poll becomes an `idle` for a session called "unknown", lighting a key). The
+app detects this and shows a "mixed builds" warning. Stop every daemon
+(`sudo pkill -f codexpad.daemon`), delete stale copies of this repo
+(early drafts like `~/codexpad`, or a nested clone from running `git clone`
+inside the repo), and start the daemon from the up-to-date folder.
+
 **Keys stay lit after tests.** The device keeps the last lighting it was
 given; nothing clears it but another command. Starting the daemon blanks all
 six keys, and `python -m codexpad.daemon --off` is the one-shot version. While

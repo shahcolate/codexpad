@@ -24,6 +24,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import __version__ as VERSION
 from . import config
 
 HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Notification",
@@ -114,7 +115,10 @@ def doctor():
             result["device"] = None      # enumeration itself failed
     except ImportError:
         pass
-    result["daemon"] = "error" not in ask_daemon({"cmd": "ping"})
+    ping = ask_daemon({"cmd": "ping"})
+    result["daemon"] = "error" not in ping
+    result["daemon_version"] = ping.get("v")
+    result["app_version"] = VERSION
     return result
 
 
@@ -463,7 +467,15 @@ async function refreshDoctor(keepBanner) {
     checkItem(d.daemon, "daemon running", "use ▶ Start daemon below") +
     checkItem(hookCount === 6, `Claude Code hooks (${hookCount}/6) in ${d.hooks.path}`,
               "click Install hooks, then fully restart Claude Code");
-  if (d.daemon) banner(null);       // running: any stale warning can go
+  if (d.daemon && d.daemon_version !== d.app_version) {
+    banner("Mixed builds: the running daemon is " +
+      (d.daemon_version || "an older build") + " but this app is " + d.app_version +
+      ".\\nStop it (sudo pkill -f codexpad.daemon), then start the daemon from " +
+      "THIS repo folder — watch out for stale copies like ~/codexpad or a " +
+      "nested clone.", false);
+    return;
+  }
+  if (d.daemon) banner(null);       // running and matching: warnings can go
   else if (!keepBanner) banner("Daemon not running.");
 }
 async function install() {
