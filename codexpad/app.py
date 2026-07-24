@@ -436,14 +436,20 @@ it needs you, green when it's done.</p>
   <p class="hint">Writes <code id="cfgpath"></code> — the daemon reloads it live.</p>
 </div>
 
-<div class="card">
+<div class="card" id="miccard">
   <h2>Mic &amp; bindings</h2>
   <p>Mic ring colour <input type="color" id="mic"></p>
   <p class="hint">When the mic bar opens or closes, this app runs these in
   <b>your login session</b> — so dictation shortcuts, AppleScript and
-  Raycast all work. macOS dictation example (needs the double-Fn shortcut
-  enabled, and Accessibility for this app):
-  <code>osascript -e 'tell application "System Events" to key code 63' -e 'tell application "System Events" to key code 63'</code></p>
+  Raycast all work. <b>Use macOS Dictation</b> fills in the double-Fn
+  trigger; you also need System Settings → Keyboard → <b>Dictation on</b>
+  with shortcut <b>"Press Fn Twice"</b>, and the first Test will ask for an
+  Accessibility grant — allow it, that's macOS asking, not us.</p>
+  <div class="row" style="margin:.4rem 0 .8rem">
+    <button onclick="dictationPreset()">🎙 Use macOS Dictation</button>
+    <button onclick="testMic('on')">Test open</button>
+    <button onclick="testMic('off')">Test close</button>
+  </div>
   <label class="hint">mic opens →
     <input type="text" id="micon" placeholder="command run when the mic opens"></label>
   <label class="hint" style="display:block;margin-top:.4rem">mic closes →
@@ -483,13 +489,14 @@ it needs you, green when it's done.</p>
 in <a href="https://github.com/shahcolate/codex-micro-for-claude/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</footer>
 
 <script>
-const EFFECTS = {0:"off",1:"solid",2:"snake",3:"rainbow",4:"breath",5:"gradient",6:"shallow breath"};
+// ids the firmware disagrees with on real keys: 2/5 do nothing, 3 = solid red
+const EFFECTS = {0:"off",1:"solid",2:"snake (n/a on keys)",3:"rainbow (fw bug: red)",4:"breath",5:"gradient (n/a on keys)",6:"shallow breath"};
 const PRESETS = {
-  Classic: {idle:["FFFFFF",1,.35], working:["0000FF",4,1], blocked:["FF8000",6,1], done:["00FF00",1,1], error:["FF0000",1,1], rainbow:["FFFFFF",3,1]},
-  Matrix:  {idle:["013220",1,.3],  working:["00FF41",2,1], blocked:["CCFF00",6,1], done:["00FF41",1,1], error:["FF2222",1,1], rainbow:["00FF41",3,1]},
-  Sunset:  {idle:["331133",1,.35], working:["FF4E88",4,1], blocked:["FFB300",6,1], done:["FF7A59",1,1], error:["D7263D",1,1], rainbow:["FF4E88",3,1]},
-  Ocean:   {idle:["0A2A3A",1,.35], working:["00B4D8",4,1], blocked:["FFD166",6,1], done:["06D6A0",1,1], error:["EF476F",1,1], rainbow:["00B4D8",3,1]},
-  Mono:    {idle:["222222",1,.3],  working:["AAAAAA",4,1], blocked:["FFFFFF",6,1], done:["FFFFFF",1,.6], error:["FFFFFF",2,1], rainbow:["FFFFFF",3,1]},
+  Classic: {idle:["FFFFFF",1,.35], working:["0000FF",4,1], blocked:["FF8000",6,1], done:["00FF00",1,1], error:["FF0000",1,1], rainbow:["FFFFFF",4,1]},
+  Matrix:  {idle:["013220",1,.3],  working:["00FF41",4,1], blocked:["CCFF00",6,1], done:["00FF41",1,1], error:["FF2222",1,1], rainbow:["00FF41",4,1]},
+  Sunset:  {idle:["331133",1,.35], working:["FF4E88",4,1], blocked:["FFB300",6,1], done:["FF7A59",1,1], error:["D7263D",1,1], rainbow:["FF4E88",4,1]},
+  Ocean:   {idle:["0A2A3A",1,.35], working:["00B4D8",4,1], blocked:["FFD166",6,1], done:["06D6A0",1,1], error:["EF476F",1,1], rainbow:["00B4D8",4,1]},
+  Mono:    {idle:["222222",1,.3],  working:["AAAAAA",4,1], blocked:["FFFFFF",6,1], done:["FFFFFF",1,.6], error:["FFFFFF",6,1], rainbow:["FFFFFF",4,1]},
 };
 let cfg = null, selSlot = 0;
 const $ = (q) => document.querySelector(q);
@@ -604,7 +611,7 @@ function paintPad(status) {
     el.style.opacity = 1;
     if (s.state === "off" || spec.effect === 0) {
       el.style.setProperty("--glow", "transparent");
-    } else if (spec.effect === 3) {
+    } else if (s.state === "rainbow" || spec.effect === 3) {
       el.classList.add("fx-rainbow");
       el.style.setProperty("--glow", "transparent");
     } else {
@@ -742,6 +749,26 @@ $$(".key").forEach(el => el.onclick = () => {
   el.classList.add("sel");
   $("#selslot").textContent = "AG0" + selSlot;
 });
+$("#micbar").onclick = () => {
+  $("#miccard").scrollIntoView({behavior: "smooth"});
+  say("mic bar: ring colour and open/close commands live in the Mic card (just scrolled there)");
+};
+document.querySelector(".knob").onclick = () =>
+  say("the dial is physical: rotate on the pad to trim brightness, press to acknowledge — mirror it with the slider here");
+$$("#pad > div:not(.key):not(.micbar):not(.knob)").forEach(el => el.onclick = () =>
+  say("that control is in the vendor firmware's lighting zone — codexpad can't paint it yet ('keys' zone: roadmap). It IS bindable: give it a command in the Mic & bindings card."));
+const DICT = `osascript -e 'tell application "System Events" to key code 63' -e 'tell application "System Events" to key code 63'`;
+function dictationPreset() {
+  $("#micon").value = DICT;
+  $("#micoff").value = DICT;      // the same double-Fn toggles dictation off
+  say("dictation trigger filled in for open AND close — now Save & apply, then Test open");
+}
+async function testMic(which) {
+  const cmd = (which === "on" ? $("#micon") : $("#micoff")).value.trim();
+  if (!cmd) return say("that field is empty — nothing to test");
+  const r = await api("/api/mictest", {command: cmd});
+  say(r.error || "ran it — did dictation pop up? If not: enable the Fn-twice shortcut and allow Accessibility");
+}
 $("#trim").oninput = () => { $("#trimval").textContent = Math.round($("#trim").value * 100) + "%"; };
 $("#trim").onchange = async () => {
   const r = await api("/api/trim", {value: +$("#trim").value});
@@ -829,6 +856,21 @@ class Handler(BaseHTTPRequestHandler):
             self._send(ask_daemon({"cmd": "pause"}))
         elif self.path == "/api/resume":
             self._send(ask_daemon({"cmd": "resume"}))
+        elif self.path == "/api/mictest":
+            # run a mic command once, right now, in the user's session — the
+            # page is localhost-only and this is the same trust level as
+            # saving the command and pressing the mic bar
+            cmd = (body.get("command") or "").strip()
+            if not cmd:
+                self._send({"error": "no command given"})
+            else:
+                try:
+                    subprocess.Popen(cmd, shell=True,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                    self._send({"ok": 1})
+                except Exception as exc:
+                    self._send({"error": str(exc)})
         else:
             self._send({"error": "not found"}, 404)
 

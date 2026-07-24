@@ -148,6 +148,12 @@ def _rpc(handle, method, params=None):
     return True
 
 
+# Software rainbow: firmware effect 3 renders solid red on the Agent Keys
+# (PROTOCOL.md §5.2), so the party is built from confirmed effects instead --
+# one hue per key, spread across the spectrum.
+RAINBOW_HUES = [0xFF0000, 0xFF8800, 0xFFEE00, 0x00E020, 0x0066FF, 0xC400FF]
+
+
 def set_slot(handle, slot, state):
     """Apply a named state to one Agent Key.
 
@@ -156,6 +162,8 @@ def set_slot(handle, slot, state):
     (omitted fields are left unchanged on the device), so this is safe.
     """
     color, effect, brightness = STATES[state]
+    if state == "rainbow":
+        color = RAINBOW_HUES[slot % len(RAINBOW_HUES)]
     with _lock:
         _slot_state[slot] = state
         _rpc(handle, "v.oai.thstatus", [{"id": slot, "c": color}])

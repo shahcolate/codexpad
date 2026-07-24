@@ -164,8 +164,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleName</key><string>Codexpad</string>
   <key>CFBundleIdentifier</key><string>cc.codexpad.daemon</string>
   <key>CFBundleExecutable</key><string>codexpad</string>
-  <key>CFBundleVersion</key><string>0.3.0</string>
-  <key>CFBundleShortVersionString</key><string>0.3.0</string>
+  <key>CFBundleVersion</key><string>0.3.1</string>
+  <key>CFBundleShortVersionString</key><string>0.3.1</string>
 $ICONKEY
   <key>LSUIElement</key><true/>
 </dict></plist>

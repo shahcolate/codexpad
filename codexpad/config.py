@@ -28,6 +28,8 @@ CONFIG_PATH = os.environ.get("CODEXPAD_CONFIG",
                              os.path.join(_home(), ".codexpad.json"))
 PORT = int(os.environ.get("CODEXPAD_PORT", "8378"))
 
+# Effect ids as the vendor client names them. On real Agent Keys (fw v0.4.1)
+# 2 and 5 do nothing and 3 renders solid red — see PROTOCOL.md §5.2.
 EFFECTS = {0: "off", 1: "solid", 2: "snake", 3: "rainbow",
            4: "breath", 5: "gradient", 6: "shallow breath"}
 
@@ -38,7 +40,10 @@ DEFAULTS = {
         "blocked": {"color": "FF8000", "effect": 6, "brightness": 1.0},
         "done":    {"color": "00FF00", "effect": 1, "brightness": 1.0},
         "error":   {"color": "FF0000", "effect": 1, "brightness": 1.0},
-        "rainbow": {"color": "FFFFFF", "effect": 3, "brightness": 1.0},
+        # per-key colour comes from the daemon's hue spread; effect 3 (the
+        # firmware's own "rainbow") renders solid red on real keys, so the
+        # default is breath, which is confirmed on hardware
+        "rainbow": {"color": "FFFFFF", "effect": 4, "brightness": 1.0},
         "off":     {"color": "000000", "effect": 0, "brightness": 0.0},
     },
     "commands": {},

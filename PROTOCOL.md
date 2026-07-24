@@ -297,18 +297,24 @@ confirming no byte swap.
 
 ### 5.2 Lighting effects
 
-| Value | Effect |
-|---|---|
-| `0` | Off |
-| `1` | Solid |
-| `2` | Snake — a lit segment travels the strip |
-| `3` | Rainbow — cycles the hue spectrum |
-| `4` | Breath — fades in and out |
-| `5` | Gradient |
-| `6` | Shallow breath — as breath, but floors at half brightness |
+| Value | Effect (per the vendor client's enumeration) | On hardware (Agent Key zone, fw v0.4.1) |
+|---|---|---|
+| `0` | Off | ✅ confirmed |
+| `1` | Solid | ✅ confirmed |
+| `2` | Snake — a lit segment travels the strip | ❌ no visible effect |
+| `3` | Rainbow — cycles the hue spectrum | ⚠️ renders **solid red**, ignoring `c` |
+| `4` | Breath — fades in and out | ✅ confirmed |
+| `5` | Gradient | ❌ no visible effect |
+| `6` | Shallow breath — as breath, but floors at half brightness | ✅ confirmed |
 
-Effect `1` (solid) is confirmed on hardware; the remaining values are documented from the
-vendor client's enumeration and have not each been individually exercised.
+The vendor enumeration and the Agent Key hardware **disagree**: on a real pad,
+`2` and `5` do nothing and `3` renders solid red regardless of the requested
+colour (observed via `v.oai.thstatus` per-key updates carrying only `c`/`e`/`b`).
+Plausible explanations, none yet proven: these effects may require the `s`
+(speed) or `m` fields to animate; they may only be implemented for `rgbcfg`
+zones rather than per-key thread status; or the id table may simply differ per
+zone. `python tools/probe.py effects [slot]` sweeps ids 0–9 through a running
+daemon so any pad owner can extend this table.
 
 ### 5.3 `v.oai.rgbcfg` — zone lighting
 
@@ -376,7 +382,9 @@ across devices or hosts.
 | Colour is `0xRRGGBB` | Verified |
 | Effect `1` = solid | Verified |
 | `sys.version` | Verified |
-| Effects `0`, `2`–`6` | Documented, not individually tested |
+| Effects `0`, `4`, `6` (off, breath, shallow breath) | Verified on the Agent Key zone |
+| Effects `2`, `5` (snake, gradient) | **Contradicted** — no visible effect per-key on fw v0.4.1 |
+| Effect `3` (rainbow) | **Contradicted** — renders solid red per-key, ignores `c` |
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
 | `AG00`–`AG05` physical positions | Verified (stated-order pass, `captures/`) |
 | `v.oai.rgbcfg` `ambient`: split partial updates, `c`/`e`/`b`, effect `1` | Verified — mic ring lights and clears; visual only, replies not read |

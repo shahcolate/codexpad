@@ -121,8 +121,11 @@ one-word shell function.
   **Install hooks** (merges into `~/.claude/settings.json`, backup first)
   and a **Start daemon** that uses the passwordless root wrapper when
   installed.
-- 🌈 **Rainbow** — all six keys run the device's own rainbow effect until
-  you press the dial.
+- 🌈 **Rainbow** — six hues spread across the six keys until you press the
+  dial. Built in software from hardware-confirmed effects: the firmware's
+  *own* rainbow effect id renders solid red on real Agent Keys, and snake
+  and gradient do nothing there either (PROTOCOL.md §5.2 has the observed
+  truth table; `python tools/probe.py effects` reproduces it).
 
 ## The hardware, mapped
 
@@ -159,11 +162,15 @@ behaving as documented. That is one zone, three fields and one effect value,
 observed at one colour; the `keys` zone, `s`/`m` and every non-solid effect
 are untested (PROTOCOL.md §5.3).
 
-To make the mic *do* something, use `mic_on_command` / `mic_off_command`
-(two fields in the panel's Mic card): the **panel** runs those in your login
-session — where dictation shortcuts, AppleScript and Raycast actually work,
-and where a root daemon can't reach. macOS dictation, for example (enable
-the double-Fn shortcut in Keyboard settings, grant the app Accessibility):
+To make the mic *do* something — like dictating into Claude Code — use
+`mic_on_command` / `mic_off_command` (the panel's Mic card): the **panel**
+runs those in your login session, where dictation shortcuts, AppleScript and
+Raycast actually work and a root daemon can't reach. The card's **Use macOS
+Dictation** button fills both fields with the double-Fn trigger; you supply
+the two macOS-side switches: System Settings → Keyboard → **Dictation on**
+with shortcut **"Press Fn Twice"**, and an Accessibility grant the first
+Test asks for. Then: focus your Claude Code terminal, hold the mic bar, and
+talk — dictation types straight into the prompt. What it fills in:
 
 ```json
 "mic_on_command": "osascript -e 'tell application \"System Events\" to key code 63' -e 'tell application \"System Events\" to key code 63'"
@@ -286,6 +293,7 @@ are the pad being on the wrong bus:
 | `permission denied: /tmp/codexpad.daemon.log` | Root-owned log from earlier sudo runs breaks user redirects | `sudo rm -f` it; current wrappers log as root by design |
 | One key lights by itself; panel says daemon unreachable | A **stale daemon build** misreads panel commands as hook messages | Restart the daemon from the up-to-date repo; the panel names mixed builds |
 | Keys stay lit after tests | The device keeps its last lighting | Any daemon start blanks; `--off`; press green/red keys |
+| "Rainbow" turned everything red; snake/gradient do nothing | Firmware truth ≠ vendor effect list on Agent Keys | Use solid/breath/shallow-breath; Rainbow now spreads real hues in software |
 | Hooks don't fire | Claude Code reads settings at launch | Fully quit and reopen; Desktop: **Code** tab + **Local** environment |
 | Need to stop everything | The app supervises and revives things by design | `sudo codexpad-stop` (daemon only) or `./make_login_app.sh remove` (stops, then uninstalls) |
 
@@ -298,13 +306,18 @@ with and without `sudo`):
 
 | launch | root | Input Monitoring | opens the pad |
 |---|---|---|---|
-| Codexpad.app (granted) → sudo wrapper | yes | yes (the app's grant) | ✅ |
 | `sudo python -m codexpad.daemon` in a granted terminal | yes | yes (inherited) | ✅ |
+| Codexpad.app (granted) → sudo wrapper | yes | yes, in theory | ⚠️ observed to still fail on at least one Mac |
 | plain `python -m codexpad` | no | yes | ❌ on these Macs |
 | root LaunchDaemon (`service.sh`) | yes | no | ❌ |
 
-Always-works fallback: `sudo python -m codexpad.daemon` in a granted
-terminal. One-word version, once the wrapper exists:
+The app row is the honest surprise: a granted app bundle *should* pass its
+grant to children the way Terminal does, but on the development Mac the pad
+stayed blocked even with a fresh grant — the panel's status strip told us so
+explicitly. The terminal chain has never failed anywhere. So: **the
+always-works path is `sudo` from a granted terminal**, and the one-word
+version below makes that painless (the app still gives you the panel and the
+supervision; only the daemon spawn is the sore spot):
 
 ```bash
 cat >> ~/.zshrc <<'EOF'
