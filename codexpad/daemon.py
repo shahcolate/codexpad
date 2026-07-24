@@ -490,10 +490,13 @@ def open_device():
     except OSError:
         sys.exit(
             "Could not open the Codex Micro.\n"
-            "  Most likely cause on macOS: Input Monitoring. Grant it to your\n"
-            "  TERMINAL app (System Settings > Privacy & Security > Input\n"
-            "  Monitoring), then FULLY quit and relaunch the terminal - grants\n"
-            "  only apply to new processes. sudo works as a stopgap.\n"
+            "  Most likely cause on macOS: Input Monitoring. In System Settings\n"
+            "  > Privacy & Security > Input Monitoring, enable BOTH your\n"
+            "  TERMINAL app AND any 'python' entry (a failed attempt adds one\n"
+            "  toggled OFF; if neither appears, add them with '+'. This python\n"
+            "  is: " + sys.executable + ").\n"
+            "  Then FULLY quit and relaunch the terminal (Cmd+Q) - grants only\n"
+            "  apply to new processes. sudo works as a stopgap.\n"
             "  To tell the causes apart, run: python tools/probe.py enumerate\n"
             "  - device listed  -> it's the permission above, nothing is "
             "'holding' it\n"
