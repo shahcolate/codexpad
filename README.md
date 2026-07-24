@@ -14,7 +14,7 @@ Blue while Claude works · amber when it needs you · green when it's done
 [![Protocol](https://img.shields.io/badge/protocol-documented%20%C2%B7%20status%20tagged-C96442)](PROTOCOL.md)
 
 <img src="docs/demo.gif" width="720" alt="The codexpad control panel mirroring live session states on the pad"><br>
-<sub>The control panel mirroring a working session, a blocked approval, a finished run, the mic opening, and rainbow mode.</sub>
+<sub>Live: a session starting, working, blocked, done · the mic bar opening dictation · software rainbow · and ChatGPT taking the pad over automatically.</sub>
 
 </div>
 
@@ -85,6 +85,11 @@ code, run **`./make_login_app.sh update`**: it refreshes the root wrappers
 without touching the app bundle, so your Input Monitoring grant survives.
 Only a full rebuild voids the grant.
 
+If the strip says the pad is *blocked* even after a fresh grant, your Mac
+is the stubborn kind that won't pass the grant through an app bundle — the
+[field guide](#field-guide) truth table covers it, and the one-word
+terminal launch there has never failed anywhere.
+
 ### Anywhere else — one command
 
 ```bash
@@ -109,13 +114,20 @@ one-word shell function.
 <img src="docs/app.png" width="680" alt="The full codexpad control panel">
 </div>
 
+- **The status strip** — always at the top: daemon state, pad state, and
+  when something's wrong, the *exact* fix ("pad on USB but blocked — Input
+  Monitoring, remove the old row…"). Nothing fails silently; every button
+  that can't reach the pad says why.
 - **Your pad, live** — a mockup mirroring the hardware in real time: which
   session owns each key, its state and effect, mic open/closed, master
-  brightness (tracks the physical dial).
+  brightness (tracks the physical dial), and the **auto-handoff** toggle
+  (give ChatGPT the pad while it's open).
 - **Colours & effects** — pickers, effect menus and brightness per state,
   five presets (Classic, Matrix, Sunset, Ocean, Mono), **Try** on any key
   you click, a **Demo** cycle. **Save** writes `~/.codexpad.json` and the
   daemon repaints live.
+- **Mic & bindings** — ring colour, **Use macOS Dictation** one-click setup
+  with Test buttons, and shell bindings for every control.
 - **Setup** — a health checklist (hidapi → device → daemon → hooks →
   runs-at-login) where every ❌ has a button that fixes it, including
   **Install hooks** (merges into `~/.claude/settings.json`, backup first)
