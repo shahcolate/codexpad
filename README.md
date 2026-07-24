@@ -206,7 +206,10 @@ lists the device, it's this permission — not the cable, and not another app
 `sudo rm -f /tmp/codexpad.sock` (the daemon says so when this is the issue).
 
 **Device doesn't enumerate.** BLE mode (USB charges but doesn't enumerate) or
-a charge-only cable. See wired mode above.
+a charge-only cable. See wired mode above. **The tell: if the pad flashes
+blue when unplugged, it's in BLE mode** — and it appears to fall back to BLE
+after losing power, so re-check wired mode after any unplug. A running
+daemon reconnects and repaints by itself once the pad is back in wired mode.
 
 **Hooks don't fire.** Run `/hooks` inside Claude Code — your events should be
 listed with source `User`. If not, fully quit and reopen the app. Desktop:

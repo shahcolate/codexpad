@@ -52,7 +52,9 @@ of them yields the vendor traffic; filter on report ID rather than selecting a c
 
 The device supports Bluetooth LE and USB. **In BLE mode, connecting USB charges the
 device but does not enumerate it** — the protocol is unavailable until wired mode is
-selected using the front-left touch control.
+selected using the front-left touch control. The mode is observed **not to survive
+power loss reliably**: after unplugging (the pad flashes blue — BLE advertising on
+battery), it can come back in BLE mode and must be switched to wired again.
 
 ### 1.3 Host permissions (macOS)
 
