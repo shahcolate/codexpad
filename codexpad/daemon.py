@@ -395,6 +395,94 @@ def reader(handle):
 
 
 # --- device lifecycle ------------------------------------------------------
+class Device:
+    """Wraps the hid handle so the daemon survives unplug/replug.
+
+    Writes and reads mark the device lost on failure instead of raising; the
+    watch() loop (run in a background thread) reopens the pad when it comes
+    back and repaints the current session states.
+    """
+
+    def __init__(self, handle):
+        self._h = handle
+        self.lost = False
+
+    def write(self, data):
+        if self.lost:
+            return 0
+        try:
+            return self._h.write(data)
+        except Exception:
+            self._mark_lost()
+            return 0
+
+    def read(self, n):
+        if self.lost:
+            time.sleep(0.2)
+            return []
+        try:
+            return self._h.read(n)
+        except Exception:
+            self._mark_lost()
+            return []
+
+    def set_nonblocking(self, flag):
+        try:
+            self._h.set_nonblocking(flag)
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            self._h.close()
+        except Exception:
+            pass
+
+    def _mark_lost(self):
+        if not self.lost:
+            self.lost = True
+            print("  device  unplugged? waiting for it to come back", flush=True)
+
+    def watch(self):
+        while True:
+            time.sleep(2)
+            if not self.lost:
+                continue
+            try:
+                fresh = hid.device()
+                fresh.open(VID, PID)
+                fresh.set_nonblocking(True)
+            except Exception:
+                continue
+            self.close()
+            self._h = fresh
+            self.lost = False
+            print("  device  back — repainting", flush=True)
+            with _lock:
+                lit = [(s, st) for s, st in _slot_state.items()
+                       if st and st != "off"]
+            if not _paused[0]:
+                for slot, state in lit:
+                    set_slot(self, slot, state)
+
+
+def wait_for_device():
+    """Poll until the pad can be opened. Used by the login service, where
+    exiting loudly would just make launchd respawn-loop."""
+    printed = False
+    while True:
+        try:
+            handle = hid.device()
+            handle.open(VID, PID)
+            return handle
+        except OSError:
+            if not printed:
+                print("waiting for the Codex Micro (wired mode? Input "
+                      "Monitoring for this python?)...", flush=True)
+                printed = True
+            time.sleep(2)
+
+
 def open_device():
     handle = hid.device()
     try:
@@ -542,6 +630,8 @@ def serve(handle):
 
     handle.set_nonblocking(True)
     threading.Thread(target=reader, args=(handle,), daemon=True).start()
+    if isinstance(handle, Device):
+        threading.Thread(target=handle.watch, daemon=True).start()
     print(f"codexpad ready on {SOCK_PATH} "
           f"({NSLOTS} agent keys, config {config.CONFIG_PATH})", flush=True)
 
@@ -569,9 +659,12 @@ def main():
                     help="cycle key 0 through every state, then exit")
     ap.add_argument("--off", action="store_true",
                     help="turn all keys off, then exit")
+    ap.add_argument("--wait", action="store_true",
+                    help="wait for the device instead of exiting when it "
+                         "can't be opened (used by the login service)")
     args = ap.parse_args()
 
-    handle = open_device()
+    handle = wait_for_device() if args.wait else open_device()
 
     if args.off:
         blank_all(handle)
@@ -590,6 +683,7 @@ def main():
             handle.close()
         return
 
+    handle = Device(handle)   # survives unplug/replug from here on
     blank_all(handle)
     try:
         serve(handle)

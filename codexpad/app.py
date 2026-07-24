@@ -141,6 +141,7 @@ def install_service():
   <key>Label</key><string>com.codexpad.daemon</string>
   <key>ProgramArguments</key><array>
     <string>{python}</string><string>-m</string><string>codexpad.daemon</string>
+    <string>--wait</string>
   </array>
   <key>WorkingDirectory</key><string>{repo}</string>
   <key>RunAtLoad</key><true/>
