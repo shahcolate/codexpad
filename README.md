@@ -166,11 +166,10 @@ what state it was in. The daemon prints the identifier of every press it sees
 
 The analog stick streams `v.oai.rad` continuously, so the daemon quantises it:
 a hard push fires a single `STICK_N/E/S/W` flick and re-arms once the stick
-recentres. **The compass orientation is a guess** — the protocol records the
-angle's range but not its zero point — so the flick log line includes the raw
-angle. If pushing up prints `STICK_E`, the mapping is rotated: fix
-`_direction()` in `codexpad/daemon.py` and open an issue so PROTOCOL.md §4.2
-can record the true orientation.
+recentres. Orientation was established with directed flicks on hardware
+(PROTOCOL.md §4.2): `a` is zero pushing down and increases counter-clockwise,
+so up is `0.5`. The west bucket is the one part inferred rather than observed
+— if a left push doesn't print `STICK_W`, open an issue with the logged angle.
 
 ---
 
@@ -242,7 +241,7 @@ substitution — if Work Louder or OpenAI ship an official SDK, use that instead
 
 - [ ] Remove the `sudo` requirement with a documented Input Monitoring setup
 - [x] Capture the Command Key `k` identifiers — `ACT06`–`ACT12`, see PROTOCOL.md §4.1
-- [ ] Confirm the stick's angle orientation (flick events exist; the compass mapping is unverified)
+- [x] Confirm the stick's angle orientation — `a=0` down, counter-clockwise; west still inferred (PROTOCOL.md §4.2)
 - [ ] Session navigation on the joystick — flicks fire, but nothing consumes them yet
 - [ ] Characterise `v.oai.rgbcfg` for the ambient ring
 - [ ] Linux and Windows testing — currently macOS only

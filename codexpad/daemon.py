@@ -188,17 +188,17 @@ def trim(handle, delta):
 def _direction(a):
     """Quantise a normalised angle into a compass quadrant.
 
-    Assumes a=0 is north and the angle increases clockwise -- the hardware has
-    NOT confirmed this orientation (PROTOCOL.md §4.2 records range, not zero
-    point). The flick log line carries the raw angle so the assumption can be
-    checked on a real stick; if flicks read rotated, fix the buckets here.
+    Orientation established by directed flicks on hardware (PROTOCOL.md §4.2):
+    a=0 is down/south and increases counter-clockwise, so up is 0.5 and right
+    is 0.25. Down, up and right are confirmed; the west bucket is inferred by
+    symmetry -- if a left push doesn't print STICK_W, this is the place to fix.
     """
     if a >= 0.875 or a < 0.125:
-        return "N"
+        return "S"
     if a < 0.375:
         return "E"
     if a < 0.625:
-        return "S"
+        return "N"
     return "W"
 
 
@@ -239,7 +239,8 @@ def dispatch(handle, msg):
         with _lock:
             cwd = next((c for c, s in _slots.items() if s == slot), None)
             state = _slot_state.get(slot)
-        print(f"  press   {key} ({state or 'free'})", flush=True)
+        print(f"  press   {key} ({state if state not in (None, 'off') else 'free'})",
+              flush=True)
         if state in ("done", "error"):
             set_slot(handle, slot, "idle")
     elif key == "ENC_CW":

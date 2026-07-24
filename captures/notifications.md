@@ -71,6 +71,11 @@ press order above reflects the order the keys happened to be pressed, so the
 physical-position ↔ identifier mapping is not established by this capture,
 and releases (`act: 0`) are filtered by the daemon and were not recorded.
 
+A second pass again began `ACT06 ACT07 ACT08 ACT09`, but the remaining three
+arrived `ACT11 ACT10 ACT12` where the first pass gave `ACT12 ACT11 ACT10` —
+that's press order, not layout. The physical mapping stays unrecorded until
+someone presses the keys in a stated order.
+
 ---
 
 ## Analog stick
@@ -88,6 +93,21 @@ One deflection and recentre:
 with `a: 0, d: 0` when the stick returns to centre. Full analog resolution is
 available; the four cardinal directions in the vendor UI are a host-side
 interpretation.
+
+### Orientation
+
+Directed flicks (author's motions, angles as logged by the daemon):
+
+```
+up     -> a=0.49
+down   -> a=0.93
+up     -> a=0.49
+right  -> a=0.24
+```
+
+Zero is at down and the angle increases counter-clockwise: up `0.5`,
+right `0.25`, down `0`/`1` (the `0.93` push was slightly off-axis). Left
+(`0.75`) was not exercised and is inferred by symmetry.
 
 ---
 

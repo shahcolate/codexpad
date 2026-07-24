@@ -214,6 +214,11 @@ Emitted continuously while deflected, terminating with `{"a": 0, "d": 0}` on rec
 Full analog resolution is available; the four cardinal directions exposed in the ChatGPT
 UI are a host-side interpretation, not a device limitation.
 
+**Orientation.** Directed flicks establish the zero point: `a` is `0.0` with the stick
+pushed down (toward the user) and increases **counter-clockwise** — right ≈ `0.25`,
+up ≈ `0.5`. Observed: up `0.49`, right `0.24`, down `0.93` (slightly off-axis). Left
+(`0.75`) is inferred by symmetry and has not been exercised.
+
 ---
 
 ## 5. Methods
@@ -298,6 +303,7 @@ Unknown methods return `404`, so this list can be extended safely by probing.
 | `v.oai.hid` schema, `AG00`–`AG05`/`ENC_*` | Verified |
 | `ACT06`–`ACT12` Command Key identifiers | Observed; physical mapping and release pattern not recorded |
 | `v.oai.rad` schema and range | Verified |
+| `v.oai.rad` orientation (`a=0` down, counter-clockwise) | Verified for down/up/right; left inferred |
 | `v.oai.thstatus` accepted, returns `{"ok":1}` | Verified |
 | Colour is `0xRRGGBB` | Verified |
 | Effect `1` = solid | Verified |
