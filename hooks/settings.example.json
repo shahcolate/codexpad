@@ -1,0 +1,66 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHON /PATH/TO/codexpad/notify.py idle"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "PYTHON /PATH/TO/codexpad/notify.py working"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|agent_needs_input|elicitation_dialog",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHON /PATH/TO/codexpad/notify.py blocked"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHON /PATH/TO/codexpad/notify.py done"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHON /PATH/TO/codexpad/notify.py error"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHON /PATH/TO/codexpad/notify.py end"
+          }
+        ]
+      }
+    ]
+  }
+}
