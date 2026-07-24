@@ -832,14 +832,16 @@ def handle_request(handle, req):
             slot = int(req.get("slot", 0))
             _rpc(handle, "v.oai.thstatus",
                  [{"id": slot, "c": config.color_int(req.get("color", "FF00FF"))}])
-            frame = {"id": slot, "e": int(req.get("effect", 1)),
-                     "b": round(float(req.get("brightness", 1.0)) * _trim[0], 2)}
+            _rpc(handle, "v.oai.thstatus",
+                 [{"id": slot, "e": int(req.get("effect", 1)),
+                   "b": round(float(req.get("brightness", 1.0)) * _trim[0], 2)}])
             # undocumented per-key fields, passed through verbatim so
-            # tools/probe.py sweeps can test what they do on real hardware
-            for extra in ("s", "m", "sk", "sa"):
-                if extra in req:
-                    frame[extra] = req[extra]
-            _rpc(handle, "v.oai.thstatus", [frame])
+            # tools/probe.py sweeps can test them on real hardware — in their
+            # own partial frame, or e+b+s+m together would blow the 61-byte
+            # body limit and be dropped
+            extras = {k: req[k] for k in ("s", "m", "sk", "sa") if k in req}
+            if extras:
+                _rpc(handle, "v.oai.thstatus", [{"id": slot, **extras}])
             print(f"  preview slot={slot}", flush=True)
         elif cmd == "zone":
             # raw rgbcfg passthrough for zone probing ('ambient' is verified,
@@ -852,8 +854,9 @@ def handle_request(handle, req):
                 fields["c"] = config.color_int(fields["c"])
             if "c" in fields:
                 _rpc(handle, "v.oai.rgbcfg", {zone: {"c": fields.pop("c")}})
-            if fields:
-                _rpc(handle, "v.oai.rgbcfg", {zone: fields})
+            items = list(fields.items())
+            for i in range(0, len(items), 2):   # 2 fields/frame: 61B limit
+                _rpc(handle, "v.oai.rgbcfg", {zone: dict(items[i:i + 2])})
             print(f"  zone    {zone} <- {req.get('fields')}", flush=True)
         elif cmd == "rainbow":
             for i in range(NSLOTS):
