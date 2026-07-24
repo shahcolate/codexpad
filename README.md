@@ -199,11 +199,25 @@ Effects: `0` off, `1` solid, `2` snake, `3` rainbow, `4` breath, `5` gradient,
 
 ## Troubleshooting
 
-**`open failed` on macOS.** Input Monitoring. Grant it to your terminal,
-fully quit and relaunch the terminal. If `python tools/probe.py enumerate`
-lists the device, it's this permission — not the cable, and not another app
-"holding" the device. After running under `sudo`, clean up with
-`sudo rm -f /tmp/codexpad.sock` (the daemon says so when this is the issue).
+**`open failed` on macOS.** Input Monitoring. In System Settings → Privacy &
+Security → Input Monitoring, enable **both** your terminal **and** your
+`python` binary (add it with **+** → Cmd+Shift+G → the path from
+`python -c "import sys; print(sys.executable)"`), then fully quit and
+relaunch the terminal. If `python tools/probe.py enumerate` lists the
+device, it's this permission — not the cable, and not another app "holding"
+it. Stubborn cases: reboot, or `tccutil reset ListenEvent` and re-grant.
+
+**If macOS still won't grant it**, skip the fight — install the daemon as a
+root system service instead (root bypasses the check entirely):
+
+```bash
+sudo ./service.sh "$(which python)"
+```
+
+Starts at boot, restarts if it dies, waits for the pad, no terminal, no
+Input Monitoring. `sudo ./service.sh remove` to uninstall. After running
+under plain `sudo`, clean up with `sudo rm -f /tmp/codexpad.sock` (the
+daemon says so when this is the issue).
 
 **Device doesn't enumerate.** BLE mode (USB charges but doesn't enumerate) or
 a charge-only cable. See wired mode above. **The tell: if the pad flashes
