@@ -431,19 +431,28 @@ async function startDaemon() {
   say("starting daemon…");
   const r = await api("/api/daemon/start", {});
   if (r.error) {
-    banner(r.error + "\\n\\n(or run it yourself: sudo python -m codexpad.daemon)");
-    say("daemon didn't start");
+    banner(r.error + "\\n\\n(stopgap: run in a terminal:  sudo python -m codexpad.daemon\\n"
+           + "— the app will find it and stop trying to spawn its own)");
+    if (r.error.includes("Input Monitoring")) {
+      const a = document.createElement("a");
+      a.href = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+      a.textContent = "Open Input Monitoring settings";
+      a.style.cssText = "display:block;margin-top:.5rem;color:#7ee8fa";
+      $("#banner").appendChild(a);
+    }
+    say("daemon didn't start — the red box says why");
+    refreshDoctor(true);            // update checklist, keep this banner
   } else {
     say(r.note || "daemon started");
     banner(null);
+    refreshDoctor();
   }
-  refreshDoctor();
 }
 function checkItem(ok, label, hint) {
   const cls = ok === true ? "ok" : (ok === false ? "bad" : "meh");
   return `<li class="${cls}">${label}${ok !== true && hint ? " — <span class='hint'>" + hint + "</span>" : ""}</li>`;
 }
-async function refreshDoctor() {
+async function refreshDoctor(keepBanner) {
   const d = await api("/api/doctor");
   if (d.error) return;
   const hookCount = Object.values(d.hooks.events).filter(Boolean).length;
@@ -454,7 +463,8 @@ async function refreshDoctor() {
     checkItem(d.daemon, "daemon running", "use ▶ Start daemon below") +
     checkItem(hookCount === 6, `Claude Code hooks (${hookCount}/6) in ${d.hooks.path}`,
               "click Install hooks, then fully restart Claude Code");
-  banner(d.daemon ? null : "Daemon not running.");
+  if (d.daemon) banner(null);       // running: any stale warning can go
+  else if (!keepBanner) banner("Daemon not running.");
 }
 async function install() {
   say("running install.sh…");
