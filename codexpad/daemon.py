@@ -426,6 +426,23 @@ def handle_request(handle, req):
         cmd = req["cmd"]
         if cmd == "ping":
             pass
+        elif cmd == "status":
+            with _lock:
+                by_slot = {s: c for c, s in _slots.items()}
+                return {"ok": 1, "trim": _trim[0],
+                        "mic": {"open": _mic["open"], "latched": _mic["latched"]},
+                        "slots": [{"slot": i,
+                                   "state": _slot_state.get(i) or "off",
+                                   "cwd": by_slot.get(i)}
+                                  for i in range(NSLOTS)]}
+        elif cmd == "trim":
+            with _lock:
+                _trim[0] = min(1.0, max(0.1, round(float(req.get("value", 1.0)), 2)))
+                lit = [(s, st) for s, st in _slot_state.items()
+                       if st and st != "off"]
+            print(f"  trim    {int(_trim[0] * 100)}% (app)", flush=True)
+            for slot, state in lit:
+                set_slot(handle, slot, state)
         elif cmd == "reload":
             load_config()
             with _lock:

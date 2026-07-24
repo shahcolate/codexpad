@@ -11,8 +11,21 @@ import json
 import os
 
 SOCK_PATH = os.environ.get("CODEXPAD_SOCK", "/tmp/codexpad.sock")
+
+
+def _home():
+    """The real user's home, even when the daemon runs under sudo.
+
+    A sudo'd daemon otherwise resolves ~ to /var/root and silently reads a
+    different config file than the one the app saves.
+    """
+    if hasattr(os, "geteuid") and os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+        return os.path.expanduser("~" + os.environ["SUDO_USER"])
+    return os.path.expanduser("~")
+
+
 CONFIG_PATH = os.environ.get("CODEXPAD_CONFIG",
-                             os.path.expanduser("~/.codexpad.json"))
+                             os.path.join(_home(), ".codexpad.json"))
 PORT = int(os.environ.get("CODEXPAD_PORT", "8378"))
 
 EFFECTS = {0: "off", 1: "solid", 2: "snake", 3: "rainbow",

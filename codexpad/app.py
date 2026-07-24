@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
-"""codexpad app - a tiny local web UI for colours, effects and party mode.
+"""codexpad app - a local web UI for colours, setup and party mode.
 
     python -m codexpad.app          # then open http://127.0.0.1:8378
 
-Colour pickers and effect menus for every state, live preview on Agent Key 0,
-mic ring colour, command bindings, and the rainbow button. Save writes
-~/.codexpad.json and asks the running daemon to reload it, so changes apply
-without a restart.
+A live mockup of the pad showing what each Agent Key is doing, colour pickers
+and effect menus for every state with preview on any key, theme presets, a
+master brightness slider, mic ring colour, command bindings, the rainbow
+button, and a Setup card that checks hidapi / device / daemon / hooks and can
+install the Claude Code hooks for you (it runs install.sh).
 
-Stdlib only, binds to 127.0.0.1 only — command bindings are shell commands
-run by the daemon, so this page must never be reachable off-machine.
+Stdlib only. Binds to 127.0.0.1 only — command bindings are shell commands
+run by the daemon and the install button writes ~/.claude/settings.json, so
+this page must never be reachable off-machine.
 """
 import json
+import os
 import socket
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config
+
+HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Notification",
+               "Stop", "StopFailure", "SessionEnd"]
 
 
 def ask_daemon(payload):
@@ -25,11 +33,68 @@ def ask_daemon(payload):
         sock.settimeout(2.0)
         sock.connect(config.SOCK_PATH)
         sock.send(json.dumps(payload).encode())
-        raw = sock.recv(4096).decode()
+        raw = sock.recv(8192).decode()
         sock.close()
-        return json.loads(raw) if raw.strip() else {"ok": 1}
     except Exception as exc:
-        return {"error": f"daemon unreachable ({exc})"}
+        return {"error": f"daemon not running ({exc})"}
+    if not raw.strip():
+        return {"error": "daemon gave no reply — it predates app commands; "
+                         "restart it (git pull, then python -m codexpad.daemon)"}
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {"error": "unparseable reply from daemon"}
+
+
+def hook_status(path=None):
+    """Which Claude Code hook events currently point at notify.py."""
+    path = path or os.path.join(config._home(), ".claude", "settings.json")
+    out = {"path": path, "found": False,
+           "events": {e: False for e in HOOK_EVENTS}}
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except Exception:
+        return out
+    out["found"] = True
+    hooks = data.get("hooks", {}) if isinstance(data, dict) else {}
+    for event in HOOK_EVENTS:
+        out["events"][event] = "notify.py" in json.dumps(hooks.get(event, ""))
+    return out
+
+
+def doctor():
+    """One-shot health check for the Setup card."""
+    result = {"config": config.CONFIG_PATH, "sock": config.SOCK_PATH,
+              "hidapi": False, "device": None, "hooks": hook_status()}
+    try:
+        import hid
+        result["hidapi"] = True
+        try:
+            result["device"] = any(
+                (d["vendor_id"], d["product_id"]) == (0x303A, 0x8360)
+                for d in hid.enumerate())
+        except Exception:
+            result["device"] = None      # enumeration itself failed
+    except ImportError:
+        pass
+    result["daemon"] = "error" not in ask_daemon({"cmd": "ping"})
+    return result
+
+
+def run_install():
+    """Run install.sh with this interpreter; returns its output."""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = os.path.join(repo, "install.sh")
+    if not os.path.exists(script):
+        return {"error": f"install.sh not found at {script}"}
+    try:
+        proc = subprocess.run([script, sys.executable], capture_output=True,
+                              text=True, timeout=30)
+        return {"ok": int(proc.returncode == 0), "code": proc.returncode,
+                "output": (proc.stdout + proc.stderr).strip()}
+    except Exception as exc:
+        return {"error": str(exc)}
 
 
 PAGE = """<!doctype html>
@@ -38,48 +103,175 @@ PAGE = """<!doctype html>
 <title>codexpad</title>
 <style>
   :root { color-scheme: dark; }
-  body { font: 15px/1.5 -apple-system, system-ui, sans-serif; background: #111418;
-         color: #e8e8e8; max-width: 680px; margin: 2rem auto; padding: 0 1rem; }
-  h1 { font-size: 1.4rem; }
-  h3 { margin-top: 1.6rem; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 -apple-system, system-ui, "Segoe UI", sans-serif;
+         background: #0d1117; color: #e6edf3; max-width: 760px;
+         margin: 1.5rem auto 4rem; padding: 0 1rem; }
+  h1 { font-size: 1.5rem; margin: 0;
+       background: linear-gradient(90deg, #7ee8fa, #eec0c6);
+       -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: #8b949e; margin: .2rem 0 1rem; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 14px;
+          padding: 1.1rem 1.2rem; margin: 1rem 0;
+          box-shadow: 0 4px 24px rgba(0,0,0,.35); }
+  .card h2 { font-size: 1.05rem; margin: 0 0 .8rem; color: #c9d1d9; }
+  #banner { display: none; background: #3d1d1d; border: 1px solid #6e2c2c;
+            color: #ffb4b4; border-radius: 10px; padding: .6rem .9rem; margin: .8rem 0; }
+  #toast { min-height: 1.3rem; color: #8b949e; margin: .6rem 0; }
   table { border-collapse: collapse; width: 100%; }
-  td, th { padding: .45rem .5rem; text-align: left; border-bottom: 1px solid #2a2f36; }
-  input[type=color] { width: 3rem; height: 2rem; border: none; background: none; cursor: pointer; }
-  input[type=range] { width: 7rem; }
-  select, button, textarea { background: #1c2127; color: #e8e8e8;
-    border: 1px solid #333a43; border-radius: 6px; padding: .35rem .6rem; }
-  button { cursor: pointer; }
-  button:hover { border-color: #5a6470; }
-  .big { font-size: 1.05rem; padding: .5rem 1rem; margin-right: .5rem; }
-  #status { margin: .8rem 0; min-height: 1.2rem; color: #9aa4af; }
-  textarea { width: 100%; font-family: ui-monospace, monospace; font-size: .85rem; }
-  .hint { color: #77808a; font-size: .85rem; }
+  td, th { padding: .4rem .5rem; text-align: left; border-bottom: 1px solid #21262d; }
+  th { color: #8b949e; font-weight: 600; font-size: .8rem; text-transform: uppercase; }
+  input[type=color] { width: 2.8rem; height: 2rem; border: none; background: none;
+                      cursor: pointer; padding: 0; }
+  input[type=range] { width: 7rem; accent-color: #7ee8fa; }
+  select, button, textarea { background: #21262d; color: #e6edf3;
+    border: 1px solid #30363d; border-radius: 8px; padding: .35rem .6rem; font: inherit; }
+  button { cursor: pointer; transition: border-color .15s, transform .05s; }
+  button:hover { border-color: #7ee8fa; }
+  button:active { transform: scale(.97); }
+  .big { font-size: 1rem; padding: .5rem 1rem; margin: 0 .4rem .4rem 0; }
+  textarea { width: 100%; font-family: ui-monospace, SFMono-Regular, monospace;
+             font-size: .85rem; }
+  .hint { color: #6e7681; font-size: .85rem; }
+  /* ---- the pad mockup ---- */
+  .padwrap { display: flex; gap: 1.4rem; flex-wrap: wrap; align-items: center; }
+  .pad { background: #1c2128; border: 1px solid #2d333b; border-radius: 20px;
+         padding: 16px; display: grid; grid-template-columns: repeat(4, 58px);
+         gap: 10px; transition: box-shadow .3s; }
+  .pad.miclive { box-shadow: 0 0 24px 4px rgba(255, 60, 60, .55); }
+  .pad > div { height: 58px; border-radius: 12px; background: #2a3038;
+               display: flex; align-items: center; justify-content: center;
+               font-size: 1.05rem; color: #768390; user-select: none; }
+  .key { cursor: pointer; border: 2px solid transparent;
+         box-shadow: inset 0 0 14px 2px var(--glow, transparent);
+         transition: box-shadow .25s, border-color .15s; }
+  .key.sel { border-color: #7ee8fa; }
+  .key .n { font-size: .65rem; color: #a3aab3; }
+  .knob { border-radius: 50% !important; background: #3a414a !important; }
+  .stick { border-radius: 50% !important; background: #14171c !important; }
+  .micbar { grid-column: span 2; }
+  .micbar.on { background: #4a1f1f; color: #ffb4b4; }
+  .touch { border-radius: 50% !important; background: #14171c !important;
+           transform: scale(.55); }
+  @keyframes breath { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  @keyframes hue { to { filter: hue-rotate(360deg) } }
+  .fx-breath { animation: breath 2.4s ease-in-out infinite; }
+  .fx-rainbow { background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red) !important;
+                animation: hue 3s linear infinite; }
+  .padside { flex: 1; min-width: 210px; }
+  .padside label { display: block; color: #8b949e; font-size: .85rem; margin-top: .7rem; }
+  .swatches button { margin: 0 .35rem .35rem 0; }
+  .check { list-style: none; padding: 0; margin: .4rem 0; }
+  .check li { padding: .15rem 0; }
+  .check .ok::before  { content: "✅ "; }
+  .check .bad::before { content: "❌ "; }
+  .check .meh::before { content: "⚠️ "; }
+  #installout { display: none; background: #0d1117; border-radius: 8px;
+                padding: .6rem .8rem; white-space: pre-wrap;
+                font: .8rem ui-monospace, monospace; margin-top: .6rem; }
+  details { margin-top: .8rem; } summary { cursor: pointer; color: #8b949e; }
 </style>
+
 <h1>🎛️ codexpad</h1>
-<p class="hint"><b>Try</b> shows a row live on Agent Key 0. <b>Save</b> writes
-~/.codexpad.json and the daemon reloads it on the spot.</p>
-<div id="status"></div>
-<table id="states">
-  <tr><th>State</th><th>Colour</th><th>Effect</th><th>Brightness</th><th></th></tr>
-</table>
-<p>
-  <button class="big" onclick="party()">🌈 Rainbow</button>
-  <button class="big" onclick="off()">⏻ All off</button>
-  <button class="big" onclick="save()">💾 Save</button>
-</p>
-<h3>Mic ring colour <input type="color" id="mic"></h3>
-<h3>Command bindings</h3>
-<p class="hint">Shell commands by control identifier — AG00–AG05, ACT06–ACT09,
-ACT12, ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF. JSON object.</p>
-<textarea id="commands" rows="6"></textarea>
+<p class="sub">Codex Micro × Claude Code — colours, buttons, setup.</p>
+<div id="banner"></div>
+<div id="toast">loading…</div>
+
+<div class="card">
+  <h2>Your pad, live</h2>
+  <div class="padwrap">
+    <div class="pad" id="pad">
+      <div class="knob" title="dial — brightness / acknowledge">◉</div>
+      <div class="key" data-slot="0"><span class="n">AG00</span></div>
+      <div class="key" data-slot="1"><span class="n">AG01</span></div>
+      <div class="stick" title="joystick">✛</div>
+      <div class="key" data-slot="2"><span class="n">AG02</span></div>
+      <div class="key" data-slot="3"><span class="n">AG03</span></div>
+      <div class="key" data-slot="4"><span class="n">AG04</span></div>
+      <div class="key" data-slot="5"><span class="n">AG05</span></div>
+      <div title="Fast mode (vendor)">⚡</div>
+      <div title="approve (vendor)">✓</div>
+      <div title="decline (vendor)">✗</div>
+      <div title="new chat (vendor)">⑂</div>
+      <div class="touch" title="mode touch control"></div>
+      <div class="micbar" id="micbar" title="mic bar — hold or double-press">🎙</div>
+      <div title="Codex key">✦</div>
+    </div>
+    <div class="padside">
+      <div class="hint">Click a key to make it the preview target.
+        Selected: <b id="selslot">AG00</b></div>
+      <label>Master brightness <span id="trimval"></span>
+        <input type="range" id="trim" min="0.1" max="1" step="0.1"></label>
+      <label>Mic: <b id="micstate">–</b></label>
+      <p style="margin-top:.9rem">
+        <button class="big" onclick="party()">🌈 Rainbow</button>
+        <button class="big" onclick="demo()">▶ Demo</button>
+        <button class="big" onclick="off()">⏻ Off</button>
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Colours &amp; effects</h2>
+  <div class="swatches" id="presets"></div>
+  <table id="states">
+    <tr><th>State</th><th>Colour</th><th>Effect</th><th>Brightness</th><th></th></tr>
+  </table>
+  <p><button class="big" onclick="save()">💾 Save &amp; apply</button>
+     <span class="hint">writes <code id="cfgpath"></code>, daemon reloads live</span></p>
+</div>
+
+<div class="card">
+  <h2>Mic &amp; bindings</h2>
+  <p>Mic ring colour <input type="color" id="mic"></p>
+  <p class="hint">Shell commands by control — AG00–AG05, ACT06–ACT09, ACT12,
+  ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF. Saved with the button above.</p>
+  <textarea id="commands" rows="5"></textarea>
+</div>
+
+<div class="card">
+  <h2>Claude Code setup</h2>
+  <ul class="check" id="checks"></ul>
+  <p>
+    <button class="big" onclick="install()">⚙️ Install hooks</button>
+    <button class="big" onclick="refreshDoctor()">↻ Re-check</button>
+  </p>
+  <div id="installout"></div>
+  <details>
+    <summary>Manual steps &amp; gotchas</summary>
+    <ol class="hint">
+      <li>Put the pad in <b>wired mode</b>: hold the front-left touch control 3s,
+          tap past the three BLE channels until the underglow turns white.</li>
+      <li>macOS: grant <b>Input Monitoring</b> to your terminal, then fully quit
+          and relaunch it (<code>sudo</code> works as a stopgap).</li>
+      <li>Run the daemon: <code>python -m codexpad.daemon</code> and leave it running.</li>
+      <li>Install hooks (button above, or <code>./install.sh</code>), then
+          <b>fully quit and reopen Claude Code</b> — it only reads settings at launch.</li>
+      <li>Desktop app: use the <b>Code</b> tab with a <b>Local</b> environment.
+          Cloud/SSH sessions run hooks remotely and can't reach your pad.</li>
+    </ol>
+  </details>
+</div>
+
 <script>
 const EFFECTS = {0:"off",1:"solid",2:"snake",3:"rainbow",4:"breath",5:"gradient",6:"shallow breath"};
-let cfg = null;
+const PRESETS = {
+  Classic: {idle:["FFFFFF",1,.35], working:["0000FF",4,1], blocked:["FF8000",6,1], done:["00FF00",1,1], error:["FF0000",1,1], rainbow:["FFFFFF",3,1]},
+  Matrix:  {idle:["013220",1,.3],  working:["00FF41",2,1], blocked:["CCFF00",6,1], done:["00FF41",1,1], error:["FF2222",1,1], rainbow:["00FF41",3,1]},
+  Sunset:  {idle:["331133",1,.35], working:["FF4E88",4,1], blocked:["FFB300",6,1], done:["FF7A59",1,1], error:["D7263D",1,1], rainbow:["FF4E88",3,1]},
+  Ocean:   {idle:["0A2A3A",1,.35], working:["00B4D8",4,1], blocked:["FFD166",6,1], done:["06D6A0",1,1], error:["EF476F",1,1], rainbow:["00B4D8",3,1]},
+  Mono:    {idle:["222222",1,.3],  working:["AAAAAA",4,1], blocked:["FFFFFF",6,1], done:["FFFFFF",1,.6], error:["FFFFFF",2,1], rainbow:["FFFFFF",3,1]},
+};
+let cfg = null, selSlot = 0;
 const $ = (q) => document.querySelector(q);
-function say(t) { $("#status").textContent = t; }
+const $$ = (q) => document.querySelectorAll(q);
+function say(t) { $("#toast").textContent = t; }
 async function api(path, body) {
-  const r = await fetch(path, body ? {method: "POST", body: JSON.stringify(body)} : {});
-  return r.json();
+  try {
+    const r = await fetch(path, body ? {method: "POST", body: JSON.stringify(body)} : {});
+    return await r.json();
+  } catch (e) { return {error: "app server unreachable: " + e.message}; }
 }
 function row(name, spec) {
   const tr = document.createElement("tr");
@@ -99,43 +291,149 @@ function specOf(tr) {
            effect: +tr.querySelector("[data-k=effect]").value,
            brightness: +tr.querySelector("[data-k=brightness]").value };
 }
+function tableSpec(name) {
+  const tr = document.querySelector(`#states tr[data-name="${name}"]`);
+  if (tr) return specOf(tr);
+  const s = cfg && cfg.states[name];
+  return s || {color: "000000", effect: 0, brightness: 0};
+}
 async function tryRow(name, tr) {
-  const r = await api("/api/preview", {slot: 0, ...specOf(tr)});
-  say(r.error || `key 0 → ${name}`);
+  const r = await api("/api/preview", {slot: selSlot, ...specOf(tr)});
+  say(r.error || `AG0${selSlot} → ${name}`);
 }
 async function party() {
   const r = await api("/api/rainbow", {});
   say(r.error || "🌈 press the dial to end the party");
 }
-async function off() {
-  const r = await api("/api/off", {});
-  say(r.error || "all off");
+async function off() { const r = await api("/api/off", {}); say(r.error || "all off"); }
+async function demo() {
+  say("demo: cycling states on AG0" + selSlot);
+  for (const name of ["idle", "working", "blocked", "done", "error"]) {
+    const s = tableSpec(name);
+    const r = await api("/api/preview", {slot: selSlot, ...s});
+    if (r.error) return say(r.error);
+    say(`demo: ${name}`);
+    await new Promise(res => setTimeout(res, 1300));
+  }
+  await api("/api/preview", {slot: selSlot, ...tableSpec("idle")});
+  say("demo done");
 }
 async function save() {
   const states = {};
-  document.querySelectorAll("#states tr[data-name]").forEach(tr => {
-    states[tr.dataset.name] = specOf(tr);
-  });
+  $$("#states tr[data-name]").forEach(tr => { states[tr.dataset.name] = specOf(tr); });
   let commands;
   try { commands = JSON.parse($("#commands").value || "{}"); }
   catch (e) { return say("commands isn't valid JSON: " + e.message); }
   const body = { states, commands,
-                 mic_color: $("#mic").value.slice(1).toUpperCase(),
-                 port: cfg.port };
+                 mic_color: $("#mic").value.slice(1).toUpperCase(), port: cfg.port };
   const r = await api("/api/config", body);
-  say(r.error ? "saved, but: " + r.error : "saved — daemon reloaded");
+  say(r.error ? "saved, but: " + r.error : "saved — daemon reloaded ✓");
 }
+function applyPreset(name) {
+  for (const [state, [c, e, b]] of Object.entries(PRESETS[name])) {
+    const tr = document.querySelector(`#states tr[data-name="${state}"]`);
+    if (!tr) continue;
+    tr.querySelector("[data-k=color]").value = "#" + c;
+    tr.querySelector("[data-k=effect]").value = e;
+    tr.querySelector("[data-k=brightness]").value = b;
+  }
+  say(`${name} preset loaded — Try a row, then Save & apply`);
+}
+function paintPad(status) {
+  const bySlot = {};
+  (status.slots || []).forEach(s => bySlot[s.slot] = s);
+  $$(".key").forEach(el => {
+    const s = bySlot[+el.dataset.slot] || {state: "off"};
+    const spec = tableSpec(s.state);
+    el.classList.remove("fx-breath", "fx-rainbow");
+    el.style.background = "";
+    el.style.opacity = 1;
+    if (s.state === "off" || spec.effect === 0) {
+      el.style.setProperty("--glow", "transparent");
+    } else if (spec.effect === 3) {
+      el.classList.add("fx-rainbow");
+      el.style.setProperty("--glow", "transparent");
+    } else {
+      el.style.setProperty("--glow", `#${spec.color}`);
+      el.style.background = `#${spec.color}2e`;   // colour tint under the glow
+      el.style.opacity = Math.max(spec.brightness, .3);
+      if (spec.effect === 4 || spec.effect === 6) el.classList.add("fx-breath");
+    }
+    el.title = s.cwd ? `${s.state} — ${s.cwd}` : s.state;
+  });
+  $("#pad").classList.toggle("miclive", !!(status.mic && status.mic.open));
+  $("#micbar").classList.toggle("on", !!(status.mic && status.mic.open));
+  $("#micstate").textContent = status.mic
+    ? (status.mic.open ? (status.mic.latched ? "open (latched)" : "open (hold)") : "closed")
+    : "–";
+  if (status.trim && document.activeElement !== $("#trim")) {
+    $("#trim").value = status.trim;
+    $("#trimval").textContent = Math.round(status.trim * 100) + "%";
+  }
+}
+async function pollStatus() {
+  const s = await api("/api/status");
+  if (!s.error) { paintPad(s); banner(null); }
+  setTimeout(pollStatus, 2500);
+}
+function banner(msg) {
+  const b = $("#banner");
+  b.style.display = msg ? "block" : "none";
+  if (msg) b.textContent = msg;
+}
+function checkItem(ok, label, hint) {
+  const cls = ok === true ? "ok" : (ok === false ? "bad" : "meh");
+  return `<li class="${cls}">${label}${ok !== true && hint ? " — <span class='hint'>" + hint + "</span>" : ""}</li>`;
+}
+async function refreshDoctor() {
+  const d = await api("/api/doctor");
+  if (d.error) return;
+  const hookCount = Object.values(d.hooks.events).filter(Boolean).length;
+  $("#checks").innerHTML =
+    checkItem(d.hidapi, "hidapi installed", "pip install hidapi") +
+    checkItem(d.device, "Codex Micro on USB",
+              "wired mode: hold the touch control 3s, tap past BLE until white") +
+    checkItem(d.daemon, "daemon running", "python -m codexpad.daemon") +
+    checkItem(hookCount === 6, `Claude Code hooks (${hookCount}/6) in ${d.hooks.path}`,
+              "click Install hooks, then fully restart Claude Code");
+  banner(d.daemon ? null :
+    "Daemon not reachable — start it with: python -m codexpad.daemon (and restart it after every git pull)");
+}
+async function install() {
+  say("running install.sh…");
+  const r = await api("/api/install", {});
+  const out = $("#installout");
+  out.style.display = "block";
+  out.textContent = r.error || r.output || "(no output)";
+  say(r.error ? "install failed" : (r.ok ? "hooks installed — now fully restart Claude Code" : "install.sh exited non-zero"));
+  refreshDoctor();
+}
+$$(".key").forEach(el => el.onclick = () => {
+  selSlot = +el.dataset.slot;
+  $$(".key").forEach(k => k.classList.remove("sel"));
+  el.classList.add("sel");
+  $("#selslot").textContent = "AG0" + selSlot;
+});
+$("#trim").oninput = () => { $("#trimval").textContent = Math.round($("#trim").value * 100) + "%"; };
+$("#trim").onchange = async () => {
+  const r = await api("/api/trim", {value: +$("#trim").value});
+  say(r.error || `brightness ${Math.round($("#trim").value * 100)}%`);
+};
 (async () => {
   cfg = await api("/api/config");
+  if (cfg.error) return say(cfg.error);
   for (const [name, spec] of Object.entries(cfg.states)) {
     if (name !== "off") $("#states").appendChild(row(name, spec));
   }
   $("#mic").value = "#" + cfg.mic_color;
   $("#commands").value = JSON.stringify(cfg.commands, null, 2);
-  const ping = await api("/api/ping", {});
-  say(ping.error
-      ? "⚠ daemon not reachable — start it with: python -m codexpad.daemon"
-      : "daemon connected");
+  $("#cfgpath").textContent = cfg.config_path || "~/.codexpad.json";
+  $("#presets").innerHTML = Object.keys(PRESETS)
+    .map(n => `<button onclick="applyPreset('${n}')">${n}</button>`).join("");
+  document.querySelector('.key[data-slot="0"]').classList.add("sel");
+  say("ready");
+  refreshDoctor();
+  pollStatus();
 })();
 </script>
 """
@@ -159,7 +457,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             self._send(PAGE.encode(), ctype="text/html; charset=utf-8")
         elif self.path == "/api/config":
-            self._send(config.load())
+            cfg = config.load()
+            cfg["config_path"] = config.CONFIG_PATH
+            self._send(cfg)
+        elif self.path == "/api/doctor":
+            self._send(doctor())
+        elif self.path == "/api/status":
+            self._send(ask_daemon({"cmd": "status"}))
         else:
             self._send({"error": "not found"}, 404)
 
@@ -176,12 +480,16 @@ class Handler(BaseHTTPRequestHandler):
             fields = {k: body[k] for k in ("slot", "color", "effect", "brightness")
                       if k in body}
             self._send(ask_daemon({"cmd": "preview", **fields}))
+        elif self.path == "/api/trim":
+            self._send(ask_daemon({"cmd": "trim", "value": body.get("value", 1.0)}))
         elif self.path == "/api/rainbow":
             self._send(ask_daemon({"cmd": "rainbow"}))
         elif self.path == "/api/off":
             self._send(ask_daemon({"cmd": "off"}))
         elif self.path == "/api/ping":
             self._send(ask_daemon({"cmd": "ping"}))
+        elif self.path == "/api/install":
+            self._send(run_install())
         else:
             self._send({"error": "not found"}, 404)
 

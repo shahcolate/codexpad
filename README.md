@@ -69,7 +69,7 @@ python -m codexpad.daemon --test     # key 0 cycles through all five states
 
 ./install.sh                         # merges hooks into ~/.claude/settings.json
 python -m codexpad.daemon            # leave this running
-python -m codexpad.app               # optional: colours & bindings UI
+python -m codexpad.app               # optional: colours, setup checks, hook installer
 ```
 
 Then quit and reopen Claude Code and send a prompt.
@@ -120,11 +120,19 @@ Run the app:
 python -m codexpad.app               # http://127.0.0.1:8378, localhost only
 ```
 
-Colour pickers and effect menus for every state, a live **Try** button that
-paints Agent Key 0, the mic ring colour, your command bindings, and the
-🌈 **Rainbow** button — all six keys run the device's own rainbow effect
-until you press the dial. **Save** writes `~/.codexpad.json` and the daemon
-reloads it on the spot, repainting anything currently lit.
+A live mockup of the pad that mirrors the real one — which session owns each
+key, mic open/closed, master brightness — plus colour pickers and effect
+menus for every state with **Try** on whichever key you click, five theme
+presets (Classic, Matrix, Sunset, Ocean, Mono), a **Demo** cycle, the mic
+ring colour, command bindings, and the 🌈 **Rainbow** button — all six keys
+run the device's own rainbow effect until you press the dial. **Save**
+writes `~/.codexpad.json` and the daemon reloads it on the spot, repainting
+anything currently lit.
+
+The **Claude Code setup** card is the wiring-up story: a live checklist
+(hidapi installed → device on USB → daemon running → hooks in
+`~/.claude/settings.json`) with an **Install hooks** button that runs
+`install.sh` for you. After installing, fully quit and reopen Claude Code.
 
 The same file edits by hand:
 
@@ -252,6 +260,13 @@ least recently used.
 `press` lines appear, the device isn't reaching the reader — wrong mode, or
 another process holds the handle. If presses print but nothing changes, that's
 expected for keys that aren't green or red; bind them via `COMMANDS`.
+
+**The app's Try button does nothing.** The app's status line and banner say
+why. Usual causes: the daemon isn't running; the daemon is an older build
+that predates app commands — restart it after every `git pull` (the app
+now detects this and says so); or the daemon runs under `sudo` and loaded
+root's config instead of yours (fixed — root now resolves `SUDO_USER`'s
+home). The Setup card's checklist shows device/daemon/hooks state live.
 
 **Keys stay lit after tests.** The device keeps the last lighting it was
 given; nothing clears it but another command. Starting the daemon blanks all
