@@ -102,6 +102,15 @@ Terminal equivalent: `printf '{"cmd":"pause"}' | nc -U /tmp/codexpad.sock`
 (and `resume`). True simultaneous use is on the roadmap — it needs the
 vendor's layer system, which nobody has characterised yet.
 
+**The transports differ, and that's the real switch.** The ChatGPT app
+drives the pad over **Bluetooth**; codexpad drives it over **USB** — and the
+pad is only ever on one. So the front-left touch control is a physical
+Claude/Codex handoff: a BLE channel (blue underglow) hands it to the ChatGPT
+app, wired (white underglow) hands it to codexpad. If macOS holds a
+Bluetooth bond with the pad, it will keep snapping back to BLE — quit the
+ChatGPT app and *Forget* the pad in System Settings → Bluetooth while you
+want it wired.
+
 ## The hardware controls
 
 Input flows back from the pad — the daemon reads the device's own
@@ -220,10 +229,14 @@ under plain `sudo`, clean up with `sudo rm -f /tmp/codexpad.sock` (the
 daemon says so when this is the issue).
 
 **Device doesn't enumerate.** BLE mode (USB charges but doesn't enumerate) or
-a charge-only cable. See wired mode above. **The tell: if the pad flashes
-blue when unplugged, it's in BLE mode** — and it appears to fall back to BLE
-after losing power, so re-check wired mode after any unplug. A running
-daemon reconnects and repaints by itself once the pad is back in wired mode.
+a charge-only cable. See wired mode above. **The tells:** the pad flashes
+blue when unplugged (BLE advertising), and — the definitive one — **it
+lights up the moment you open the ChatGPT app while `system_profiler
+SPUSBDataType` shows nothing**: that's the vendor app driving it over
+Bluetooth. Quit the ChatGPT app, Forget the pad in System Settings →
+Bluetooth, then switch to wired; an existing BLE bond keeps pulling the pad
+back to Bluetooth otherwise. A running daemon reconnects and repaints by
+itself once the pad is back in wired mode.
 
 **Hooks don't fire.** Run `/hooks` inside Claude Code — your events should be
 listed with source `User`. If not, fully quit and reopen the app. Desktop:

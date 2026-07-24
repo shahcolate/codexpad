@@ -56,6 +56,12 @@ selected using the front-left touch control. The mode is observed **not to survi
 power loss reliably**: after unplugging (the pad flashes blue — BLE advertising on
 battery), it can come back in BLE mode and must be switched to wired again.
 
+**An existing BLE bond dominates.** With the pad paired to a host, it returns to BLE
+and reconnects — the vendor's ChatGPT client drives it over Bluetooth, so the pad
+"works" for that client while entirely absent from the USB bus. Wired mode holds
+reliably only after the Bluetooth pairing is removed on the host. The transport is
+therefore also the ownership switch: one host stack at a time, selected physically.
+
 ### 1.3 Host permissions (macOS)
 
 Because the device exposes a Keyboard collection, macOS gates opening it behind
