@@ -301,20 +301,22 @@ confirming no byte swap.
 |---|---|---|
 | `0` | Off | ✅ confirmed |
 | `1` | Solid | ✅ confirmed |
-| `2` | Snake — a lit segment travels the strip | ❌ no visible effect |
-| `3` | Rainbow — cycles the hue spectrum | ⚠️ renders **solid red**, ignoring `c` |
-| `4` | Breath — fades in and out | ✅ confirmed |
-| `5` | Gradient | ❌ no visible effect |
-| `6` | Shallow breath — as breath, but floors at half brightness | ✅ confirmed |
+| `2` | Snake — a lit segment travels the strip | ❌ no animation observed |
+| `3` | Rainbow — cycles the hue spectrum | ⚠️ **solid red**, ignoring `c` — reproduced across two sweeps and three colours |
+| `4` | Breath — fades in and out | ❌ renders as plain solid, no animation |
+| `5` | Gradient | ❌ no animation observed |
+| `6` | Shallow breath — as breath, but floors at half brightness | ❌ renders as plain solid |
+| `7`–`9` | (not in the vendor enumeration) | swept; nothing noteworthy recorded |
 
-The vendor enumeration and the Agent Key hardware **disagree**: on a real pad,
-`2` and `5` do nothing and `3` renders solid red regardless of the requested
-colour (observed via `v.oai.thstatus` per-key updates carrying only `c`/`e`/`b`).
-Plausible explanations, none yet proven: these effects may require the `s`
-(speed) or `m` fields to animate; they may only be implemented for `rgbcfg`
-zones rather than per-key thread status; or the id table may simply differ per
-zone. `python tools/probe.py effects [slot]` sweeps ids 0–9 through a running
-daemon so any pad owner can extend this table.
+A full id sweep (0–9, white and blue, `c`/`e`/`b` fields only) found that
+per-key thread lighting honours exactly two effects: **off and solid**. Every
+animated effect in the vendor enumeration either renders as solid (`4`, `6`)
+or shows nothing distinct (`2`, `5`), and `3` is hard-coded solid red
+regardless of the requested colour. Open questions, in test order: does the
+undocumented `s` (speed?) field switch animation on (probe `speeds`); does the
+`ambient` zone animate where keys don't (probe `ring`); is the `keys` zone a
+separate lighting engine (probe `keys`). Sweeps run through a live daemon —
+`python tools/probe.py <sweep>` — so any pad owner can extend this table.
 
 ### 5.3 `v.oai.rgbcfg` — zone lighting
 
@@ -382,9 +384,9 @@ across devices or hosts.
 | Colour is `0xRRGGBB` | Verified |
 | Effect `1` = solid | Verified |
 | `sys.version` | Verified |
-| Effects `0`, `4`, `6` (off, breath, shallow breath) | Verified on the Agent Key zone |
-| Effects `2`, `5` (snake, gradient) | **Contradicted** — no visible effect per-key on fw v0.4.1 |
-| Effect `3` (rainbow) | **Contradicted** — renders solid red per-key, ignores `c` |
+| Effect `0` (off) | Verified on the Agent Key zone |
+| Effects `2`, `4`, `5`, `6` (every animated effect) | **Contradicted** — none animate per-key on fw v0.4.1; `4`/`6` render solid |
+| Effect `3` (rainbow) | **Contradicted** — solid red per-key, ignores `c`; reproduced twice |
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
 | `AG00`–`AG05` physical positions | Verified (stated-order pass, `captures/`) |
 | `v.oai.rgbcfg` `ambient`: split partial updates, `c`/`e`/`b`, effect `1` | Verified — mic ring lights and clears; visual only, replies not read |
