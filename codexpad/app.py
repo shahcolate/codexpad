@@ -390,7 +390,7 @@ it needs you, green when it's done.</p>
 </div>
 
 <footer>Unofficial, unaffiliated, MIT. Every protocol claim is status-tagged
-in <a href="https://github.com/shahcolate/codex-micro-for-claude/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</footer>
+in <a href="https://github.com/shahcolate/codexpad/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</footer>
 
 <script>
 const EFFECTS = {0:"off",1:"solid",2:"snake",3:"rainbow",4:"breath",5:"gradient",6:"shallow breath"};
@@ -594,8 +594,8 @@ async function refreshDoctor(keepBanner) {
     banner("Mixed builds: the running daemon is " +
       (d.daemon_version || "an older build") + " but this app is " + d.app_version +
       ".\\nStop it (sudo pkill -f codexpad.daemon), then start the daemon from " +
-      "THIS repo folder — watch out for stale copies like ~/codexpad or a " +
-      "nested clone.", false);
+      "THIS repo folder — watch out for stale copies under another name or " +
+      "a nested clone.", false);
     return;
   }
   if (d.daemon) banner(null);       // running and matching: warnings can go

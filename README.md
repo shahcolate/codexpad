@@ -61,7 +61,7 @@ root, via a passwordless rule for one fixed command), supervises daemon and
 panel so they restart if they die, and opens the control panel.
 
 ```bash
-git clone https://github.com/shahcolate/codex-micro-for-claude && cd codex-micro-for-claude
+git clone https://github.com/shahcolate/codexpad && cd codexpad
 pip install -r requirements.txt
 ./make_login_app.sh "$(which python)"
 ```
@@ -278,7 +278,7 @@ terminal. One-word version, once the wrapper exists:
 
 ```bash
 cat >> ~/.zshrc <<'EOF'
-codexpad() { sudo -n /usr/local/bin/codexpad-daemon & (cd ~/codex-micro-for-claude && python -m codexpad.app --no-daemon >/dev/null 2>&1 &); sleep 1; open http://127.0.0.1:8378; }
+codexpad() { sudo -n /usr/local/bin/codexpad-daemon & (cd ~/codexpad && python -m codexpad.app --no-daemon >/dev/null 2>&1 &); sleep 1; open http://127.0.0.1:8378; }
 EOF
 ```
 
