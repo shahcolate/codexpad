@@ -351,9 +351,12 @@ mapped in §5.2's zone table. The `m` field did nothing in any zone.
 **LED addressing limits, from a stated-order mapping session:** `v.oai.thstatus`
 accepts exactly ids `0`–`5` (the six Agent Keys) — a full sweep of ids `0`–`15`,
 solid green, lit nothing beyond them, so the remaining LEDs are *not* reachable as
-thread ids. The `keys` zone is driven only as a whole through `rgbcfg`; its LED
-chain order was observed by running a slow snake (`e:2, s:0.3`) across it, which
-**starts at the ⑂ (fork / new-chat) key** — remaining crawl order to be recorded.
+thread ids. The `keys` zone is addressable only as a whole through `rgbcfg`. A slow
+snake (`e:2, s:0.3`) across it showed: the chain **enters at the ⑂ (fork/new-chat)
+key**, proceeds to the adjacent key, and the **mic bar's LEDs light on the same
+chain** almost immediately — so the zone spans the vendor keys *and* the mic bar as
+one strip. The snake's segment is several LEDs wide, which blurs neighbours; a
+per-LED chain order would need a narrower segment (unknown field) or firmware help.
 
 ### 5.4 Other methods
 
