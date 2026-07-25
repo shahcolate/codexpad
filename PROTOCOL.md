@@ -321,7 +321,8 @@ Effect ids vs zones, fw v0.4.1, all observed on hardware:
 Snake and gradient appear to be **strip effects**: they render on the
 multi-LED ambient ring and `keys` zone but never on a single Agent Key,
 which is geometrically sensible. `m` alone changed nothing in any test.
-Speed semantics of `s` (which value maps to which rate) are unmeasured.
+Higher `s` is visibly faster (confirmed by eye across 0.2–5); the exact
+value-to-rate mapping is unmeasured.
 Sweeps run through a live daemon — `python tools/probe.py effects|speeds|
 ring|keys` — so any pad owner can extend this table.
 
