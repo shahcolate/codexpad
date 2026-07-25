@@ -12,10 +12,11 @@ the mic bar is a hold-to-talk / double-press-to-latch toggle with MIC_ON and
 MIC_OFF hooks, and COMMANDS binds any control to a shell command.
 
 Usage:
-    python -m codexpad.daemon           # run the daemon
-    python -m codexpad.daemon --test    # cycle key 0 through every state and exit
-    python -m codexpad.daemon --off     # turn all keys off and exit
-    python -m codexpad.app              # colours & bindings UI (separate process)
+    python -m codexpad.daemon            # run the daemon
+    python -m codexpad.daemon --test     # cycle key 0 through every state and exit
+    python -m codexpad.daemon --off      # turn all keys off and exit
+    python -m codexpad.daemon --restore  # RESCUE: relight every zone and exit
+    python -m codexpad.app               # colours & bindings UI (separate process)
 
 Colours, effects and command bindings come from ~/.codexpad.json (see
 codexpad/config.py for the defaults). See PROTOCOL.md for the wire format.
@@ -23,6 +24,7 @@ codexpad/config.py for the defaults). See PROTOCOL.md for the wire format.
 import argparse
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -96,11 +98,35 @@ def load_config():
     MIC_COLOR[0] = config.color_int(cfg["mic_color"])
     APPROVE_FROM_PAD[0] = bool(cfg.get("approve_from_pad"))
     NAG_MINUTES[0] = cfg.get("nag_minutes", 10)
+    ZONE_BASELINE.clear()
+    ZONE_BASELINE.update({name: config.zone_fields(spec)
+                          for name, spec in (cfg.get("zones") or {}).items()
+                          if isinstance(spec, dict)})
+    RING_OFF_RESTORES[0] = cfg.get("ring_off_restores", True) is not False
+    AUTO_HANDOFF[0] = cfg.get("auto_handoff", True) is not False
     return cfg
 
 
 APPROVE_FROM_PAD = [False]    # checkmark/cross answer the focused prompt
 NAG_MINUTES = [10]            # ring lights after this long blocked; 0 = off
+AUTO_HANDOFF = [True]         # release the pad while the vendor client runs
+RING_OFF_RESTORES = [True]    # ring "off" = baseline, not brightness zero
+
+# --- zones: the part that outlives us ----------------------------------------
+# v.oai.thstatus is per-thread STATUS -- transient, and any host repaints it.
+# v.oai.rgbcfg is zone CONFIGURATION, and what we write to a zone stays
+# written: it survives our process, a reboot, and a switch to the vendor
+# client. Writing {"e": 0, "b": 0} to a zone therefore does not mean "stop
+# showing my thing", it means "configure this zone dark for everyone" -- and
+# no vendor UI puts it back. That is how a pad ends up looking bricked: the
+# ambient ring (which is also the BLE-blue / wired-white mode tell) and the
+# key backlight stay off no matter who drives the device.
+#
+# So codexpad never releases a zone by zeroing it. It releases a zone by
+# writing ZONE_BASELINE, and it remembers which zones it has touched so it
+# can put them back on pause, on handoff, and on the way out.
+ZONE_BASELINE = {}            # zone -> wire fields, from config["zones"]
+_zones_touched = set()
 
 
 load_config()
@@ -115,7 +141,75 @@ _lock = threading.RLock()     # serialises HID writes and the slot tables
 # Pause must survive a daemon restart: the login app supervises the daemon
 # with a restart loop, and a respawn that forgot it was paused would repaint
 # Claude states all over the vendor client mid-handoff.
+#
+# But a pause that survives too well is its own outage -- a paused daemon is
+# a daemon where nothing works, silently. Two things used to make it stick:
+# the flag is written by a ROOT daemon (the login app sudo-runs it) so a
+# later user-owned daemon's os.unlink raised EPERM into a bare `except: pass`
+# and "resume" reported success while the flag stayed on disk; and an AUTO
+# pause had no expiry, so one that outlived its ChatGPT session sat there
+# until someone found the file. Both are handled below.
 PAUSE_FLAG = SOCK_PATH + ".paused"
+AUTO_PAUSE_MAX_S = 6 * 3600   # an auto-handoff older than this is stale
+
+
+def write_pause_flag(reason):
+    """Record the pause with its provenance and age. World-writable, so a
+    daemon under a different uid can still clear it later."""
+    try:
+        with open(PAUSE_FLAG, "w") as fh:
+            json.dump({"by": reason, "at": time.time(), "pid": os.getpid()}, fh)
+        os.chmod(PAUSE_FLAG, 0o666)
+    except OSError as exc:
+        print(f"  pause   could not persist the flag: {exc}", flush=True)
+
+
+def clear_pause_flag():
+    """Remove the flag, and say so if we couldn't.
+
+    Falls back to truncating: unlink needs write permission on /tmp's entry
+    (root's file, sticky directory), but the 0o666 file itself can always be
+    emptied. read_pause_flag() treats an empty file as 'not paused'.
+    """
+    try:
+        os.unlink(PAUSE_FLAG)
+        return True
+    except FileNotFoundError:
+        return True
+    except OSError:
+        pass
+    try:
+        with open(PAUSE_FLAG, "w"):
+            pass
+        return True
+    except OSError as exc:
+        print(f"  resume  WARNING: the pause flag {PAUSE_FLAG} is not ours to "
+              f"clear ({exc}) — the next restart would come up paused. "
+              f"Remove it by hand: sudo rm -f {PAUSE_FLAG}", flush=True)
+        return False
+
+
+def read_pause_flag():
+    """(paused, reason) from the flag, resolving stale auto-pauses to False."""
+    try:
+        with open(PAUSE_FLAG) as fh:
+            raw = fh.read().strip()
+    except OSError:
+        return False, ""
+    if not raw:                       # truncated by a clear we couldn't unlink
+        return False, ""
+    try:
+        info = json.loads(raw)
+        reason = str(info.get("by") or "manual")
+        age = time.time() - float(info.get("at") or 0)
+    except (ValueError, TypeError):
+        return True, raw or "manual"  # pre-0.6 flag: a bare reason string
+    if reason == "auto" and age > AUTO_PAUSE_MAX_S:
+        print(f"  pause   ignoring a stale auto-handoff flag "
+              f"({int(age / 3600)}h old) — taking the pad back", flush=True)
+        clear_pause_flag()
+        return False, ""
+    return True, reason
 
 # --- session stats -----------------------------------------------------------
 # The daemon sees every session's lifecycle anyway; keep the running tally the
@@ -159,6 +253,37 @@ def emit_event(name):
         _event_cond.notify_all()
 
 
+# Pacing between consecutive frames. The device is happy to be written to
+# back-to-back over USB, but a partial update that arrives out of order looks
+# like a dropped field, and this has never been characterised. Tests set it
+# to 0.
+WRITE_GAP = [0.02]
+
+
+def _encode(method, seq, params):
+    msg = {"m": method, "id": seq}
+    if params is not None:
+        msg["p"] = params
+    return json.dumps(msg, separators=(",", ":")).encode() + b"\r\n"
+
+
+def _num(value):
+    """Shortest faithful encoding of a lighting number.
+
+    Worth two bytes, and two bytes decide whether a frame is sent at all.
+    json.dumps writes 1.0 as "1.0" but 1 as "1", and a full-brightness
+    thstatus update with a two-digit request id lands at exactly 61 bytes --
+    the limit -- so the float form pushed it to 62 and the device never saw
+    it. Symptom: the key took its new colour and kept its old brightness,
+    which from 'off' means it silently stayed dark.
+    """
+    try:
+        value = round(float(value), 2)
+    except (TypeError, ValueError):
+        return value
+    return int(value) if value == int(value) else value
+
+
 def _rpc(handle, method, params=None):
     """Send one JSON-RPC frame. Fire and forget; replies are never awaited.
 
@@ -166,17 +291,54 @@ def _rpc(handle, method, params=None):
     reader thread drops them (see reader()).
     """
     _seq[0] = (_seq[0] % 90) + 1
-    msg = {"m": method, "id": _seq[0]}
-    if params is not None:
-        msg["p"] = params
-    body = json.dumps(msg, separators=(",", ":")).encode() + b"\r\n"
+    body = _encode(method, _seq[0], params)
     if len(body) > MAX_BODY:
+        # Never silently. An over-long frame is simply not transmitted (§2.1),
+        # which is indistinguishable from the pad ignoring us -- and lighting
+        # frames sit within a byte or two of the limit, so this fired in
+        # normal use for years' worth of brightness values without a word.
+        print(f"  DROPPED {method} — body {len(body)}B over the {MAX_BODY}B "
+              f"frame limit: {body[:48]!r}…", flush=True)
         return False
     frame = bytes([REPORT_ID, CHANNEL, len(body)]) + body
     with _lock:
         handle.write(frame.ljust(REPORT_LEN, b"\x00"))
-        time.sleep(0.02)
+        if WRITE_GAP[0]:
+            time.sleep(WRITE_GAP[0])
     return True
+
+
+def _send_fields(handle, method, wrap, fields):
+    """Send a partial lighting update, packed into as few frames as fit.
+
+    §2.1 gives us 61 bytes and §5.1 gives us partial updates, so the right
+    strategy is to measure rather than guess: pack greedily, and start a new
+    frame the moment one more field would go over. Colour is emitted first
+    and usually alone -- an 8-digit colour is most of a frame by itself.
+
+    Guessing was the old strategy (two fields per frame, always) and it was
+    wrong by one or two bytes exactly where it mattered most.
+    """
+    fields = {k: (_num(v) if k in ("b", "s") else v)
+              for k, v in fields.items() if v is not None}
+    if not fields:
+        return True
+    ordered = ([("c", fields.pop("c"))] if "c" in fields else []) \
+        + sorted(fields.items())
+    ok, batch = True, {}
+    for key, value in ordered:
+        candidate = dict(batch, **{key: value})
+        # +2 bytes of headroom: the request id grows from one digit to two
+        # as the sequence wraps, and a frame that fits at id 9 must still fit
+        # at id 90.
+        if batch and len(_encode(method, _seq[0], wrap(candidate))) + 2 > MAX_BODY:
+            ok &= _rpc(handle, method, wrap(batch))
+            batch = {key: value}
+        else:
+            batch = candidate
+    if batch:
+        ok &= _rpc(handle, method, wrap(batch))
+    return ok
 
 
 # Software rainbow: firmware effect 3 renders solid red on the Agent Keys
@@ -185,21 +347,28 @@ def _rpc(handle, method, params=None):
 RAINBOW_HUES = [0xFF0000, 0xFF8800, 0xFFEE00, 0x00E020, 0x0066FF, 0xC400FF]
 
 
+def thread_write(handle, slot, fields):
+    """Partial per-key lighting update, split to fit the frame limit."""
+    return _send_fields(handle, "v.oai.thstatus",
+                        lambda f: [dict(f, id=slot)], fields)
+
+
 def set_slot(handle, slot, state):
     """Apply a named state to one Agent Key.
 
-    Split across two frames: a full ThreadLighting object with an 8-digit
-    decimal colour exceeds the 61-byte body limit. Partial updates are legal
-    (omitted fields are left unchanged on the device), so this is safe.
+    Split across frames: a full ThreadLighting object with an 8-digit decimal
+    colour exceeds the 61-byte body limit. Partial updates are legal (omitted
+    fields are left unchanged on the device), so this is safe -- as long as
+    every piece actually goes out, which is what _send_fields guarantees and
+    the old fixed two-frame split did not.
     """
     color, effect, brightness = STATES[state]
     if state == "rainbow":
         color = RAINBOW_HUES[slot % len(RAINBOW_HUES)]
     with _lock:
         _slot_state[slot] = state
-        _rpc(handle, "v.oai.thstatus", [{"id": slot, "c": color}])
-        _rpc(handle, "v.oai.thstatus",
-             [{"id": slot, "e": effect, "b": round(brightness * _trim[0], 2)}])
+        thread_write(handle, slot, {"c": color, "e": effect,
+                                    "b": brightness * _trim[0]})
 
 
 # --- slot allocation -------------------------------------------------------
@@ -328,21 +497,69 @@ def flick(a, d):
             run_command(name, None, None)
 
 
+def zone_write(handle, zone, fields):
+    """Write one rgbcfg zone, split so no frame exceeds the 61-byte body.
+
+    Colour goes alone (an 8-digit colour plus the zone name is already within
+    a byte of the limit), then the rest two fields at a time. Records the zone
+    as touched so restore_zones() knows to put it back.
+    """
+    fields = dict(fields)
+    if not fields:
+        return
+    _zones_touched.add(zone)
+    with _lock:
+        return _send_fields(handle, "v.oai.rgbcfg",
+                            lambda f: {zone: f}, fields)
+
+
+def restore_zones(handle, zones=None, force=False):
+    """Hand zones back the way we promised to leave them.
+
+    This is the un-brick: it rewrites ZONE_BASELINE (lit, solid, full
+    brightness by default) over whatever codexpad last configured. By default
+    it only touches zones we actually wrote to; `force` covers every zone in
+    the baseline, which is what the rescue paths want -- they run precisely
+    because some *earlier* process left a zone dark.
+    """
+    names = zones if zones is not None else sorted(
+        ZONE_BASELINE if force else _zones_touched)
+    done = []
+    for zone in names:
+        fields = ZONE_BASELINE.get(zone)
+        if not fields:
+            continue
+        zone_write(handle, zone, fields)
+        _zones_touched.discard(zone)
+        done.append(zone)
+    if done:
+        print(f"  zones   restored to baseline: {', '.join(done)}", flush=True)
+    return done
+
+
 def set_ring(handle, on, color=None):
     """Light the ambient ring (mic indicator, nag light, MCP callers).
 
-    Single-zone partial updates, split across two frames like set_slot to fit
-    the 61-byte body, fire and forget. This path is what confirmed the ambient
-    zone on hardware (PROTOCOL.md §5.3) -- but only for c/e/b at solid, and
-    replies are never read. If the ring stays dark the mic events still fire;
-    probe the method directly and report what it returns.
+    Single-zone partial updates, split across two frames to fit the 61-byte
+    body, fire and forget. This path is what confirmed the ambient zone on
+    hardware (PROTOCOL.md §5.3) -- but only for c/e/b at solid, and replies
+    are never read. If the ring stays dark the mic events still fire; probe
+    the method directly and report what it returns.
+
+    Turning it OFF restores the zone baseline rather than writing brightness
+    zero. rgbcfg is configuration and outlives us: a zeroed ring stays dark
+    for the vendor client too, and the ring is the pad's own transport
+    indicator, so zeroing it also destroys the only tell for which bus the
+    pad is on. Set "ring_off_restores": false to get the old behaviour back.
     """
     if on:
-        _rpc(handle, "v.oai.rgbcfg",
-             {"ambient": {"c": MIC_COLOR[0] if color is None else color}})
-        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 1, "b": 1}})
+        zone_write(handle, "ambient",
+                   {"c": MIC_COLOR[0] if color is None else color,
+                    "e": 1, "b": 1})
+    elif RING_OFF_RESTORES[0]:
+        restore_zones(handle, ["ambient"])
     else:
-        _rpc(handle, "v.oai.rgbcfg", {"ambient": {"e": 0, "b": 0}})
+        zone_write(handle, "ambient", {"e": 0, "b": 0})
 
 
 _last_pulse = {}              # slot -> last shimmer, rate-limited
@@ -360,14 +577,13 @@ def pulse(handle, slot):
         if state != "working":
             return
         _, _, brightness = STATES[state]
-        _rpc(handle, "v.oai.thstatus",
-             [{"id": slot, "b": round(max(0.15, brightness * _trim[0] * 0.3), 2)}])
+        thread_write(handle, slot,
+                     {"b": max(0.15, brightness * _trim[0] * 0.3)})
 
     def restore():
         with _lock:
             if _slot_state.get(slot) == "working" and not _paused[0]:
-                _rpc(handle, "v.oai.thstatus",
-                     [{"id": slot, "b": round(brightness * _trim[0], 2)}])
+                thread_write(handle, slot, {"b": brightness * _trim[0]})
     threading.Timer(0.12, restore).start()
 
 
@@ -679,9 +895,102 @@ class Device:
             with _lock:
                 lit = [(s, st) for s, st in _slot_state.items()
                        if st and st != "off"]
-            blank_all(self)             # clear whatever the pad was showing
+            # Only repaint what's ours. This used to blank all six first,
+            # which meant every replug wiped whatever else had the pad lit.
             for slot, state in lit:
                 set_slot(self, slot, state)
+
+
+# --- sharing the pad with the vendor client ----------------------------------
+# Auto-handoff used to live entirely in the control panel, which made it an
+# optional feature of an optional process: run the daemon on its own -- the
+# root wrapper, service.sh, the README's own `sudo python -m codexpad.daemon`
+# -- and nothing ever released the pad. The daemon held the handle and
+# repainted over the vendor client indefinitely. The process that OWNS the
+# device is the one that has to know how to let go of it, so the watcher
+# lives here now. The panel's copy is harmless and idempotent; whichever
+# notices first wins.
+VENDOR_APPS = ("ChatGPT",)
+
+
+def vendor_client_running():
+    """Is the vendor's app up? None when we can't tell (no pgrep, not macOS)."""
+    if sys.platform != "darwin":
+        return None
+    for name in VENDOR_APPS:
+        try:
+            proc = subprocess.run(["pgrep", "-x", name], capture_output=True)
+        except (OSError, ValueError):
+            return None
+        if proc.returncode == 0:
+            return True
+    return False
+
+
+def take_back(handle, why):
+    """Undo an auto-handoff and repaint our sessions."""
+    with _lock:
+        _paused[0] = False
+        _paused_by[0] = ""
+        lit = [(s, st) for s, st in _slot_state.items()
+               if st and st != "off"]
+    clear_pause_flag()
+    if isinstance(handle, Device):
+        handle.reconnect_now()
+    for slot, state in lit:
+        set_slot(handle, slot, state)
+    print(f"  resume  {why} — pad reclaimed", flush=True)
+
+
+def vendor_watcher(handle):
+    while True:
+        time.sleep(3)
+        try:
+            auto_paused = _paused[0] and _paused_by[0] == "auto"
+            if not AUTO_HANDOFF[0]:
+                # Turning auto-handoff off while it was in effect used to
+                # strand the daemon: the only code that could undo an auto
+                # pause bailed out one line earlier than the undo.
+                if auto_paused:
+                    take_back(handle, "auto-handoff switched off")
+                continue
+            running = vendor_client_running()
+            if running is None:
+                continue
+            if running and not _paused[0]:
+                hand_over(handle, "auto")
+            elif not running and auto_paused:
+                take_back(handle, "vendor client quit")
+        except Exception as exc:
+            print(f"  handoff err {exc}", flush=True)
+
+
+def shutdown(handle, blank=True):
+    """Leave the pad the way we found it, as far as we're able.
+
+    Called on SIGTERM and SIGHUP, and on Ctrl-C via the KeyboardInterrupt
+    path. SIGTERM is the one that matters: it is how the login app's
+    supervisor, codexpad-stop and every pkill in the shell scripts actually
+    stop this process, and until now none of them got a clean exit. The
+    daemon simply died holding whatever it had last configured, so a stop
+    left the ring dark and the keys frozen on stale session states -- for the
+    vendor client as much as for us.
+    """
+    try:
+        if blank:
+            blank_owned(handle)
+        restore_zones(handle)
+        if isinstance(handle, Device):
+            handle.release()
+        else:
+            handle.close()
+    except Exception:
+        pass
+    try:
+        if os.path.exists(SOCK_PATH):
+            os.unlink(SOCK_PATH)
+    except OSError:
+        pass
 
 
 def _pad_error(handle):
@@ -724,8 +1033,128 @@ def open_device():
 
 
 def blank_all(handle):
+    """Every Agent Key off. An explicit user action only (--off, the Off
+    button, the dial): it overwrites whatever the vendor client had lit."""
     for i in range(NSLOTS):
         set_slot(handle, i, "off")
+
+
+def blank_owned(handle, everything=False):
+    """Blank only the keys codexpad has actually painted.
+
+    The difference matters at start-up and on every USB reconnect. Blanking
+    all six there was codexpad announcing itself by wiping the pad -- if the
+    vendor client had keys lit, they went dark and stayed dark. With no
+    sessions of our own there is nothing to clear, so we touch nothing.
+    """
+    with _lock:
+        slots = (range(NSLOTS) if everything
+                 else [s for s, st in _slot_state.items() if st and st != "off"])
+    for slot in slots:
+        set_slot(handle, slot, "off")
+    return list(slots)
+
+
+def hand_over(handle, reason):
+    """Give the pad to the vendor client: clear our keys, put every zone we
+    touched back to baseline, then let go of the device entirely.
+
+    Order matters. The zone restore has to go out while we still hold the
+    handle, or the ring stays however codexpad last configured it for the
+    whole time the vendor client owns the pad -- which is exactly the state
+    that reads as a dead pad.
+    """
+    with _lock:
+        snapshot = dict(_slot_state)
+    blank_owned(handle)
+    restore_zones(handle)
+    with _lock:
+        _slot_state.clear()
+        _slot_state.update(snapshot)   # keep tracking; resume repaints
+        _paused[0] = True
+        _paused_by[0] = reason
+    _nag_on[0] = False
+    if isinstance(handle, Device):
+        handle.release()
+    write_pause_flag(reason)
+    print(f"  pause   pad handed to the vendor client ({reason})", flush=True)
+
+
+def rescue():
+    """Put the pad's lighting back, from a cold start, with nothing running.
+
+    This is the path out of the state this whole mechanism exists to prevent:
+    a zone left configured dark, so the pad looks dead under EVERY host --
+    codexpad, the vendor client, anything. It has to work when the daemon is
+    wedged, when it's holding the device, and when it isn't running at all,
+    so it tries the socket first and falls back to opening the pad directly.
+
+    It does not start a daemon and it does not stay resident.
+    """
+    print("codexpad rescue — relighting every zone and clearing stuck state\n")
+    cleared = clear_pause_flag()
+    print(f"  pause flag  {'cleared' if cleared else 'COULD NOT CLEAR'} "
+          f"({PAUSE_FLAG})")
+
+    if os.path.exists(SOCK_PATH):
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(4.0)
+            sock.connect(SOCK_PATH)
+            # a paused daemon still holds no device; resume first so the
+            # restore has something to write through
+            sock.send(json.dumps({"cmd": "resume"}).encode())
+            sock.recv(8192)
+            sock.close()
+            reply = _rescue_via_socket()
+            if reply is not None and "error" not in reply:
+                print(f"  zones       restored via the running daemon: "
+                      f"{', '.join(reply.get('zones') or []) or 'none'}")
+                print("\nIf the pad is still dark, quit the vendor app, "
+                      "unplug and replug the pad, and run this again.")
+                return
+            if reply is not None:
+                print(f"  daemon      said: {reply['error']}")
+        except OSError as exc:
+            print(f"  daemon      not usable ({exc}) — opening the pad direct")
+
+    print("  device      opening directly…")
+    try:
+        handle = hid.device()
+        handle.open(VID, PID)
+    except Exception as exc:
+        sys.exit(
+            f"  FAILED: {exc}\n\n"
+            "  The rescue needs to reach the pad. In order:\n"
+            "    1. Quit the ChatGPT app — it may be holding the device.\n"
+            "    2. Make sure the pad is in WIRED mode (hold the front-left\n"
+            "       touch control 3s and tap through the channels). If the\n"
+            "       ring is dark you cannot read the mode off it any more —\n"
+            "       check `python tools/probe.py enumerate` for a [USB] row.\n"
+            "    3. macOS Input Monitoring, or re-run this under sudo:\n"
+            f"         sudo {sys.executable} -m codexpad.daemon --restore")
+    handle.set_nonblocking(True)
+    restore_zones(handle, force=True)
+    for i in range(NSLOTS):
+        set_slot(handle, i, "off")
+    handle.close()
+    print("\n  done. Every zone in your config's \"zones\" table is lit again\n"
+          "  and all six Agent Keys are cleared. Open the ChatGPT app and\n"
+          "  check the pad; if the ring is still dark, power-cycle the pad\n"
+          "  (the firmware reasserts its own ring colour on boot) and rerun.")
+
+
+def _rescue_via_socket():
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(6.0)
+        sock.connect(SOCK_PATH)
+        sock.send(json.dumps({"cmd": "restore"}).encode())
+        raw = sock.recv(8192).decode()
+        sock.close()
+        return json.loads(raw) if raw.strip() else None
+    except (OSError, ValueError):
+        return None
 
 
 # --- main ------------------------------------------------------------------
@@ -755,6 +1184,8 @@ def handle_request(handle, req):
                 by_slot = {s: c for c, s in _slots.items()}
                 return {"ok": 1, "trim": _trim[0], "paused": _paused[0],
                         "paused_by": _paused_by[0],
+                        "zones_touched": sorted(_zones_touched),
+                        "vendor_running": vendor_client_running(),
                         "device": (handle.status() if isinstance(handle, Device)
                                    else {"connected": True, "seen": True,
                                          "error": ""}),
@@ -790,42 +1221,29 @@ def handle_request(handle, req):
             for slot, state in lit:
                 set_slot(handle, slot, state)
         elif cmd == "pause":
-            # hand the pad to the vendor client: blank our lights, then let
-            # go of the device entirely so ChatGPT gets it clean — while
-            # still tracking session states so resume can repaint them
-            with _lock:
-                snapshot = dict(_slot_state)
-            blank_all(handle)
-            with _lock:
-                _slot_state.clear()
-                _slot_state.update(snapshot)
-                _paused[0] = True
-            if isinstance(handle, Device):
-                handle.release()
-            _paused_by[0] = "auto" if req.get("auto") else "manual"
-            try:                      # survive a daemon restart mid-handoff —
-                with open(PAUSE_FLAG, "w") as fh:
-                    fh.write(_paused_by[0])   # WITH its provenance, so the
-            except OSError:                   # watcher can undo stale autos
-                pass
-            print(f"  pause   pad handed to the vendor client "
-                  f"({_paused_by[0]})", flush=True)
+            hand_over(handle, "auto" if req.get("auto") else "manual")
         elif cmd == "resume":
-            with _lock:
-                _paused[0] = False
-                _paused_by[0] = ""
-                lit = [(s, st) for s, st in _slot_state.items()
-                       if st and st != "off"]
-            try:
-                os.unlink(PAUSE_FLAG)
-            except OSError:
-                pass
-            if isinstance(handle, Device):
-                handle.reconnect_now()   # don't wait for watch()'s next tick
-            blank_all(handle)            # clear the vendor client's leftovers
-            for slot, state in lit:
-                set_slot(handle, slot, state)
-            print("  resume  pad is ours again", flush=True)
+            take_back(handle, "asked for the pad back")
+        elif cmd == "restore":
+            # The un-brick: put every zone in the baseline back, whether or
+            # not THIS process is the one that darkened it. A paused daemon
+            # has let go of the device, so take it back for the write —
+            # rescuing the lighting is worth interrupting a handoff for, and
+            # the vendor watcher hands it straight back on the next tick.
+            if _paused[0]:
+                with _lock:
+                    _paused[0] = False
+                    _paused_by[0] = ""
+                clear_pause_flag()
+                if isinstance(handle, Device):
+                    handle.reconnect_now()
+            pad_err = _pad_error(handle)
+            if pad_err:
+                return pad_err
+            done = restore_zones(handle, force=True)
+            if req.get("keys") is not False:
+                blank_owned(handle, everything=True)
+            return {"ok": 1, "zones": done}
         elif cmd == "reload":
             load_config()
             with _lock:
@@ -836,33 +1254,28 @@ def handle_request(handle, req):
             print("  reload  config applied", flush=True)
         elif cmd == "preview":
             slot = int(req.get("slot", 0))
-            _rpc(handle, "v.oai.thstatus",
-                 [{"id": slot, "c": config.color_int(req.get("color", "FF00FF"))}])
-            _rpc(handle, "v.oai.thstatus",
-                 [{"id": slot, "e": int(req.get("effect", 1)),
-                   "b": round(float(req.get("brightness", 1.0)) * _trim[0], 2)}])
-            # undocumented per-key fields, passed through verbatim so
-            # tools/probe.py sweeps can test them on real hardware — in their
-            # own partial frame, or e+b+s+m together would blow the 61-byte
-            # body limit and be dropped
+            # undocumented per-key fields ride along verbatim so
+            # tools/probe.py sweeps can test them on real hardware;
+            # thread_write packs everything into as many frames as it takes
             extras = {k: req[k] for k in ("s", "m", "sk", "sa") if k in req}
-            if extras:
-                _rpc(handle, "v.oai.thstatus", [{"id": slot, **extras}])
+            thread_write(handle, slot, dict(
+                extras,
+                c=config.color_int(req.get("color", "FF00FF")),
+                e=int(req.get("effect", 1)),
+                b=float(req.get("brightness", 1.0)) * _trim[0]))
             print(f"  preview slot={slot}", flush=True)
         elif cmd == "zone":
-            # raw rgbcfg passthrough for zone probing ('ambient' is verified,
-            # 'keys' is the unexplored one). Colour first, rest after, same
-            # split as the mic ring uses.
+            # Raw rgbcfg passthrough for zone probing ('ambient' is verified,
+            # 'keys' is the unexplored one). zone_write splits the frames and,
+            # importantly, records the zone as touched — a probe sweep that
+            # leaves a zone somewhere odd is then something shutdown() and
+            # `restore` know to undo.
             zone = str(req.get("zone", "ambient"))
             fields = {k: v for k, v in (req.get("fields") or {}).items()
                       if k in ("c", "e", "b", "s", "m")}
             if isinstance(fields.get("c"), str):
                 fields["c"] = config.color_int(fields["c"])
-            if "c" in fields:
-                _rpc(handle, "v.oai.rgbcfg", {zone: {"c": fields.pop("c")}})
-            items = list(fields.items())
-            for i in range(0, len(items), 2):   # 2 fields/frame: 61B limit
-                _rpc(handle, "v.oai.rgbcfg", {zone: dict(items[i:i + 2])})
+            zone_write(handle, zone, fields)
             print(f"  zone    {zone} <- {req.get('fields')}", flush=True)
         elif cmd == "rainbow":
             for i in range(NSLOTS):
@@ -970,6 +1383,8 @@ def serve(handle):
     handle.set_nonblocking(True)
     threading.Thread(target=reader, args=(handle,), daemon=True).start()
     threading.Thread(target=nagger, args=(handle,), daemon=True).start()
+    threading.Thread(target=vendor_watcher, args=(handle,),
+                     daemon=True).start()
     if isinstance(handle, Device):
         threading.Thread(target=handle.watch, daemon=True).start()
     print(f"codexpad ready on {SOCK_PATH} "
@@ -994,7 +1409,15 @@ def main():
                     help="serve immediately and keep watching for the device "
                          "instead of exiting when it can't be opened (used "
                          "by the login service)")
+    ap.add_argument("--restore", action="store_true",
+                    help="rescue: put every lighting zone back to a lit "
+                         "baseline, clear all six keys and any stuck pause, "
+                         "then exit. Use when the pad's lights are dead "
+                         "everywhere, including in the vendor app.")
     args = ap.parse_args()
+
+    if args.restore:
+        return rescue()
 
     if args.off or args.test:
         handle = open_device()          # one-shots need the pad now
@@ -1013,15 +1436,11 @@ def main():
             handle.close()
         return
 
-    _paused[0] = os.path.exists(PAUSE_FLAG)   # a restart forgets nothing
+    _paused[0], _paused_by[0] = read_pause_flag()   # a restart forgets nothing
     if _paused[0]:
-        try:
-            with open(PAUSE_FLAG) as fh:
-                _paused_by[0] = fh.read().strip() or "manual"
-        except OSError:
-            _paused_by[0] = "manual"
         print(f"  pause   still in effect from before the restart "
-              f"({_paused_by[0]})", flush=True)
+              f"({_paused_by[0]}) — the pad belongs to the vendor client "
+              f"until it quits, or until you click Take pad back", flush=True)
 
     if args.wait:
         # Socket first, device whenever it shows up: while the pad is in BLE
@@ -1030,15 +1449,23 @@ def main():
         handle = Device()
     else:
         handle = Device(open_device())  # manual runs still fail fast, loudly
-        if not _paused[0]:
-            blank_all(handle)
+
+    # Starting up is not a reason to touch the pad. This used to blank all
+    # six keys on every launch -- and the login app relaunches the daemon
+    # whenever it dies -- so codexpad repeatedly wiped lighting it had never
+    # set. We only own a key once a session claims it.
+
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None)):
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, lambda *_: (shutdown(handle), os._exit(0)))
+        except (ValueError, OSError):
+            pass          # not the main thread / platform without it
     try:
         serve(handle)
     except KeyboardInterrupt:
-        blank_all(handle)
-        handle.close()
-        if os.path.exists(SOCK_PATH):
-            os.unlink(SOCK_PATH)
+        shutdown(handle)
         print("\nstopped")
 
 

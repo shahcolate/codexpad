@@ -48,6 +48,24 @@ DEFAULTS = {
     },
     "commands": {},
     "mic_color": "FF0000",
+    # How a zone should look when codexpad is asserting nothing on it.
+    #
+    # v.oai.rgbcfg is device CONFIGURATION, not transient status: what we
+    # write to a zone stays written, across processes and across hosts. So
+    # "turn the mic ring off" must NOT mean "write brightness 0 to the zone"
+    # -- that leaves the pad's underglow dark for the vendor client too, and
+    # nothing in the vendor UI puts it back. Releasing a zone means writing
+    # this baseline instead. Colour is deliberately absent: the firmware
+    # drives the ring's own colour (the BLE-blue / wired-white mode tell) and
+    # we should hand that back rather than pin it. Add "color" here if you
+    # want a fixed one.
+    "zones": {
+        "ambient": {"effect": 1, "brightness": 1.0},
+        "keys":    {"effect": 1, "brightness": 1.0},
+    },
+    # False = the old behaviour: closing the mic writes the ring dark and
+    # leaves it dark. Only useful if you actually want an unlit ring.
+    "ring_off_restores": True,
     # Run by the PANEL in your login session when the mic opens/closes --
     # the place for dictation triggers and AppleScript, which a root daemon
     # can't reach. Left empty they do nothing.
@@ -91,10 +109,13 @@ def load():
         cfg["commands"] = user["commands"]
     if isinstance(user.get("mic_color"), str):
         cfg["mic_color"] = user["mic_color"]
+    for name, spec in (user.get("zones") or {}).items():
+        if isinstance(spec, dict):
+            cfg["zones"].setdefault(name, {}).update(spec)
     for key in ("mic_on_command", "mic_off_command", "focus_command"):
         if isinstance(user.get(key), str):
             cfg[key] = user[key]
-    for key in ("auto_handoff", "approve_from_pad"):
+    for key in ("auto_handoff", "approve_from_pad", "ring_off_restores"):
         if isinstance(user.get(key), bool):
             cfg[key] = user[key]
     if isinstance(user.get("nag_minutes"), (int, float)) \
@@ -108,7 +129,8 @@ def load():
 def save(user_cfg):
     """Write the user-editable subset to CONFIG_PATH."""
     keep = {key: user_cfg[key]
-            for key in ("states", "commands", "mic_color",
+            for key in ("states", "commands", "mic_color", "zones",
+                        "ring_off_restores",
                         "mic_on_command", "mic_off_command",
                         "auto_handoff", "focus_command", "approve_from_pad",
                         "nag_minutes", "port")
@@ -124,6 +146,34 @@ def color_int(value):
     if isinstance(value, int):
         return value
     return int(str(value).lstrip("#"), 16)
+
+
+def zone_fields(spec):
+    """A zones[] config entry -> the wire fields v.oai.rgbcfg takes.
+
+    Only keys the device is known to accept survive, and colour is packed the
+    same way as everywhere else. An entry with no colour leaves the zone's
+    colour alone, which is the point: we restore brightness and effect and let
+    the firmware keep owning the hue.
+    """
+    out = {}
+    if isinstance(spec.get("color"), (str, int)):
+        try:
+            out["c"] = color_int(spec["color"])
+        except ValueError:
+            pass
+    if "effect" in spec:
+        try:
+            out["e"] = int(spec["effect"])
+        except (TypeError, ValueError):
+            pass
+    for key, field in (("brightness", "b"), ("speed", "s")):
+        if key in spec:
+            try:
+                out[field] = round(float(spec[key]), 2)
+            except (TypeError, ValueError):
+                continue
+    return out
 
 
 def states_as_tuples(cfg):

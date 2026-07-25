@@ -243,9 +243,10 @@ codexpad ships an MCP server (stdlib-only, like everything here):
 claude mcp add codexpad -- python -m codexpad.mcp
 ```
 
-Now any MCP client — Claude Desktop chats, agents, scripts — gets six tools:
+Now any MCP client — Claude Desktop chats, agents, scripts — gets seven tools:
 `pad_status`, `pad_set` (paint a key), `pad_session` (named sessions with the
-same lifecycle hooks use), `pad_ring`, `pad_rainbow`, `pad_off`. Which means
+same lifecycle hooks use), `pad_ring`, `pad_rainbow`, `pad_off`,
+`pad_restore`. Which means
 you can just *tell Claude* "light key 3 green when the deploy finishes" or
 have an agent track its long task on a key by calling
 `pad_session(name="deploy", state="working")` … `state="done"`. The daemon
@@ -276,6 +277,11 @@ Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
   },
   "commands": {"ACT06": "open -a 'Claude'"},
   "mic_color": "FF0000",
+  "zones": {
+    "ambient": {"effect": 1, "brightness": 1.0},
+    "keys":    {"effect": 1, "brightness": 1.0}
+  },
+  "ring_off_restores": true,
   "mic_on_command": "",
   "mic_off_command": "",
   "auto_handoff": true,
@@ -285,12 +291,17 @@ Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
 }
 ```
 
+`zones` is how codexpad leaves the pad's two lighting zones when it stops
+asserting anything on them — see [the pad went dark
+everywhere](#the-pad-went-dark-everywhere) for why that is not the same as
+"off", and why `ambient` has no colour here by default.
+
 Effects: `0` off, `1` solid, `4` breath, `6` shallow breath — all confirmed
 on hardware. `2` snake and `5` gradient do nothing on real Agent Keys, and
 `3` rainbow renders solid red (PROTOCOL.md §5.2). Colours are `RRGGBB` —
 verified, no byte swap. The daemon's socket takes commands directly:
-`rainbow`, `off`, `ring`, `reload`, `pause`, `resume`, `status`, `trim`,
-`wait_event` (long-poll for pad events), e.g.
+`rainbow`, `off`, `ring`, `reload`, `pause`, `resume`, `restore`, `status`,
+`trim`, `zone`, `wait_event` (long-poll for pad events), e.g.
 `printf '{"cmd":"status"}' | nc -U /tmp/codexpad.sock`.
 
 ## How it works
@@ -301,6 +312,12 @@ Claude Code hook ──stdin JSON──▶ notify.py ──unix socket──▶ 
                                               control panel ────┘  (reload · preview · pause · status)
 ```
 
+- **The daemon owns letting go, too.** It watches for the vendor client
+  itself, so the handoff no longer depends on the control panel being up —
+  running the daemon bare (the root wrapper, `service.sh`, `sudo python -m
+  codexpad.daemon`) used to mean it never released the pad at all. It also
+  restores the lighting zones and blanks its own keys on `SIGTERM`, and never
+  blanks keys it didn't paint: starting up is not a reason to wipe the pad.
 - **The daemon holds the HID handle** — opening per hook is slow and races.
   It survives unplug/replug (reconnects and repaints), and its socket comes
   up **before** the pad does: while the device is missing or blocked, the
@@ -336,6 +353,69 @@ column before relying on a claim: it separates what was exercised from what
 is documented-but-untested or inferred, and the untested list is not short.
 `tools/probe.py` exists so you can promote a row against your own pad.
 
+## The pad went dark everywhere
+
+If the pad shows nothing — no Agent Keys, no underglow, and **the ChatGPT app
+can't light it either** — it is almost certainly not broken hardware. It is a
+lighting *zone* left switched off.
+
+The device has two different lighting calls, and they are not the same kind of
+thing. `v.oai.thstatus` is per-key **status**: transient, and whoever drives
+the pad next repaints it. `v.oai.rgbcfg` is zone **configuration**, and what
+you write to a zone *stays written* — across processes, across a reboot, and
+across a switch back to the vendor client. There are two zones: `ambient`
+(the underglow ring) and `keys` (the under-keycap backlight).
+
+So a client that says "turn my indicator off" by writing brightness `0` to a
+zone hasn't stopped showing its indicator — it has configured that part of the
+pad dark for everyone, and nothing in the vendor's UI puts it back. Older
+codexpad builds did exactly that: on every mic close, on every nag clear, and
+at the end of `probe.py ring` and `probe.py keys`. The `ambient` zone is also
+the firmware's transport indicator (blue = BLE, white = wired), so a dark ring
+takes the mode tell with it and every "tap until the ring is white"
+instruction stops being followable.
+
+**The fix, in one command:**
+
+```bash
+python -m codexpad.daemon --restore
+```
+
+It works with the daemon running (it goes through the socket), with the daemon
+wedged, and with nothing running at all (it opens the pad itself). It clears
+any stuck pause, rewrites every zone in your config's `zones` table back to
+lit, blanks the six Agent Keys, and exits — it does not leave anything
+resident. `python tools/probe.py restore` and the panel's **✚ Restore
+lighting** button do the same thing. If the pad isn't reachable at all, the
+command tells you which of the three usual reasons it is.
+
+Then power-cycle the pad once: the firmware reasserts its own ring colour on
+boot, which is the only way to get the *original* hue back — codexpad restores
+brightness and effect but deliberately doesn't pin `ambient`'s colour, because
+that colour is the firmware's to own.
+
+Current builds don't create this state: releasing a zone means restoring your
+baseline, never zeroing it, and the daemon restores every zone it touched
+before handing the pad over and on the way out (including on `SIGTERM`, which
+is how `codexpad-stop` and the login app's supervisor stop it). You can set
+what "restored" means, per zone:
+
+```json
+"zones": {
+  "ambient": {"effect": 1, "brightness": 1.0},
+  "keys":    {"effect": 1, "brightness": 1.0}
+},
+"ring_off_restores": true
+```
+
+Set `ring_off_restores` to `false` for the old behaviour if you genuinely want
+an unlit ring — knowing it stays unlit for the ChatGPT app too.
+
+> Whether `rgbcfg` values truly survive a power cycle is **inferred**, not
+> instrumented — the naming, the split from `thstatus`, and the observed
+> symptom all point that way, but there's no known getter to read a zone back.
+> The behaviour above is the safe one under either reading (PROTOCOL.md §5.3).
+
 ## Field guide
 
 Every symptom and fix below was hit and cleared on real hardware; the middle
@@ -345,6 +425,8 @@ are the pad being on the wrong bus:
 
 | Symptom | It means | Fix |
 |---|---|---|
+| **Nothing lights at all — not for codexpad, not for ChatGPT, not the ring** | A lighting **zone** was left configured dark. `v.oai.rgbcfg` is device *config*, not transient state: it stays written, for every host | **`python -m codexpad.daemon --restore`** (or ✚ Restore lighting in the panel). See [the pad went dark everywhere](#the-pad-went-dark-everywhere) |
+| Keys change colour but stay dim, or don't light after using the dial | Fixed on daemons ≥ 0.6.0. The brightness frame was one byte over the 61-byte limit and was **silently dropped**, so the key kept its old brightness — from `off`, zero | Update and restart the daemon; the panel names mixed builds |
 | Pad lights up only when the ChatGPT app opens | It's on **Bluetooth**; the vendor app drives it over BLE | Quit ChatGPT, *Forget* the pad in Bluetooth settings, tap to the **white ring** |
 | `probe.py enumerate` lists it but nothing can open it | Check the bus tag — BLE HID looks identical to USB | `[BLUETOOTH]` → tap to wired; want `[USB]` |
 | Flashes blue when unplugged; "wired" doesn't stick | BLE advertising; the mode reverts on power loss, bonds dominate | Re-check for white after any unplug |
@@ -358,12 +440,25 @@ are the pad being on the wrong bus:
 | One key lights by itself; panel says daemon unreachable | A **stale daemon build** misreads panel commands as hook messages | Restart the daemon from the up-to-date repo; the panel names mixed builds |
 | Keys stay lit after tests | The device keeps its last lighting | Any daemon start blanks; `--off`; press green/red keys |
 | "Rainbow" turned everything red; snake/gradient do nothing | Firmware truth ≠ vendor effect list on Agent Keys | Use solid/breath/shallow-breath; Rainbow now spreads real hues in software |
-| ChatGPT stopped driving the pad since codexpad arrived | The daemon held the device / stomped the vendor lights | Update — auto-handoff releases the pad while ChatGPT runs. For BLE instead: tap the touch key to a blue-ring channel and re-pair |
+| ChatGPT stopped driving the pad since codexpad arrived | The daemon held the device / stomped the vendor lights | Update — auto-handoff releases the pad while ChatGPT runs, and on daemons ≥ 0.6.0 it runs **in the daemon**, so it works without the panel. For BLE instead: tap the touch key to a blue-ring channel and re-pair |
+| Everything is dead and the panel says the pad is handed to Codex, but ChatGPT isn't running | A stale pause flag. Before 0.6.0 a root-written flag couldn't be cleared by a later user daemon, and "Take pad back" reported success while the flag stayed | Update; 0.6.0 expires stale auto-pauses and says so when it can't clear the flag. By hand: `sudo rm -f /tmp/codexpad.sock.paused` |
 | Hooks don't fire | Claude Code reads settings at launch | Fully quit and reopen; Desktop: **Code** tab + **Local** environment |
 | Need to stop everything | The app supervises and revives things by design | `sudo codexpad-stop` (daemon only) or `./make_login_app.sh remove` (stops, then uninstalls) |
 
 Logs: daemon → `/tmp/codexpad.daemon.log` (safe to `tail -f`), panel →
 `~/.codexpad.app.log`, hooks (with `CODEXPAD_DEBUG=1`) → `/tmp/codexpad.log`.
+
+A `DROPPED` line in the daemon log means a lighting frame went over the
+61-byte limit and was never sent (PROTOCOL.md §2.1). It used to happen
+silently, which looked exactly like the pad ignoring you; the frame packer
+splits updates to fit, so if you see one, it's a bug worth
+[reporting](../../issues).
+
+Tests — no hardware needed, they run against a fake pad:
+
+```bash
+python -m unittest discover -s tests
+```
 
 **The macOS permission truth table** (some Macs need root *and* Input
 Monitoring at once — diagnose with `python tools/probe.py color 0 00FF00`
@@ -407,6 +502,8 @@ app's supervisor would otherwise both spawn daemons.)
 - [x] Tool-call shimmer (PreToolUse), amber nag escalation on the ring
 - [x] MCP server: `pad_*` tools for Claude Desktop, agents, scripts
 - [x] Remote-session relay (`/api/hook`), pip install from git, session stats
+- [x] Never brick the pad: zone restore instead of zeroing, `--restore`
+      rescue, daemon-side handoff, measured frame packing, a test suite
 - [ ] Simultaneous Codex + Claude via the vendor's layer system
 - [ ] Native menu-bar app (panel without the browser)
 - [ ] Joystick session navigation; `keys` zone; `s`/`m` fields (may fix the broken firmware effects)

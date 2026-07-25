@@ -15,10 +15,18 @@ protocol against your own device before trusting anything in that document.
     python tools/probe.py ring                  effect sweep on the ambient ring
     python tools/probe.py keys                  first probe of the unexplored
                                                 'keys' zone - watch the pad!
+    python tools/probe.py restore               RESCUE: relight every zone
 
 The four sweeps go through the RUNNING DAEMON's socket - the daemon keeps
 the device, no sudo needed. Everything else opens the device directly, which
 on macOS may need Input Monitoring, or sudo.
+
+!! The zone sweeps (ring, keys) write v.oai.rgbcfg, which is device
+!! CONFIGURATION and STAYS WRITTEN - across processes, across a reboot, and
+!! across a switch back to the vendor client. A zone left dark is dark for
+!! everyone, and no vendor UI puts it back. Every sweep here therefore ends
+!! by restoring the zone rather than switching it off; if one is interrupted
+!! part-way, run `restore`.
 """
 import json
 import os
@@ -213,8 +221,12 @@ def cmd_ringfx(_slot=None):
                     "fields": {"c": "00A0FF", "e": 2, "b": 1, "s": s}})
         print(f"  ambient e=2 (snake) + s={s}")
         time.sleep(4)
-    ask_daemon({"cmd": "zone", "zone": "ambient", "fields": {"e": 0, "b": 0}})
-    print("\ndone - ring cleared. Report what each id did.")
+    # restore, NOT {"e": 0, "b": 0} -- that would configure the ring dark for
+    # every host including the vendor client, and the ring is the pad's own
+    # BLE-blue / wired-white transport indicator
+    ask_daemon({"cmd": "restore"})
+    print("\ndone - ring restored to your configured baseline. Report what "
+          "each id did.")
 
 
 def cmd_keyszone(_slot=None):
@@ -222,10 +234,15 @@ def cmd_keyszone(_slot=None):
 
     The zone name comes from the vendor client's schema and has never been
     exercised on hardware. Watch the WHOLE pad - especially the five keys
-    codexpad can't paint (lightning/check/cross/fork/star)."""
+    codexpad can't paint (lightning/check/cross/fork/star).
+
+    This is the riskiest sweep in the file: if 'keys' really is the master
+    backlight zone, a value left behind here affects every key the vendor
+    client lights too. It ends on a restore for that reason."""
     pong = _need_daemon()
     print(f"daemon {pong.get('v', '?')} - poking the unexplored 'keys' zone.")
-    print("Watch the whole pad, especially the Command Keys.\n")
+    print("Watch the whole pad, especially the Command Keys.")
+    print("If it goes dark and stays dark:  python tools/probe.py restore\n")
     combos = [{"c": "00FF00", "e": 1, "b": 1},
               {"c": "FF00FF", "e": 1, "b": 0.5},
               {"c": "00A0FF", "e": 4, "b": 1},
@@ -236,9 +253,22 @@ def cmd_keyszone(_slot=None):
             sys.exit(f"daemon said: {r['error']}")
         print(f"  keys <- {fields}")
         time.sleep(4)
-    ask_daemon({"cmd": "zone", "zone": "keys", "fields": {"e": 0, "b": 0}})
-    print("\ndone (sent keys off too). Report anything that lit, blinked or "
-          "changed - or 'nothing at all', which is also an answer.")
+    ask_daemon({"cmd": "restore"})
+    print("\ndone - zones restored to your configured baseline. Report "
+          "anything that lit, blinked or changed - or 'nothing at all', "
+          "which is also an answer.")
+
+
+def cmd_restore(*_args):
+    """Put the pad's lighting back after a sweep, a crash, or an old build.
+
+    Delegates to the daemon when one is up (it holds the device) and opens
+    the pad directly when one isn't -- the same rescue the daemon's
+    --restore flag runs, reachable without knowing where the repo lives.
+    """
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from codexpad.daemon import rescue
+    rescue()
 
 
 def cmd_effects(slot="0"):
@@ -285,6 +315,8 @@ def main():
         cmd_ringfx(*rest)
     elif cmd == "keys":
         cmd_keyszone(*rest)
+    elif cmd == "restore":
+        cmd_restore(*rest)
     else:
         print(__doc__)
 

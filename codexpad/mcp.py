@@ -17,6 +17,11 @@ import os
 import socket
 import sys
 
+try:
+    from . import __version__ as VERSION
+except ImportError:                    # run as a plain script
+    VERSION = "0"
+
 SOCK_PATH = os.environ.get("CODEXPAD_SOCK", "/tmp/codexpad.sock")
 PROTOCOL_VERSION = "2024-11-05"
 
@@ -66,6 +71,13 @@ TOOLS = [
     {"name": "pad_off",
      "description": "Blank every Agent Key.",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "pad_restore",
+     "description": "Rescue: relight every lighting zone and clear all six "
+                    "keys. Use when the pad's lights look dead everywhere — "
+                    "including in the vendor's own app — which happens when "
+                    "a zone was left configured dark (rgbcfg is persistent "
+                    "device config, not transient state).",
+     "inputSchema": {"type": "object", "properties": {}}},
 ]
 
 
@@ -105,6 +117,8 @@ def call_tool(name, args):
         return ask_daemon({"cmd": "rainbow"})
     if name == "pad_off":
         return ask_daemon({"cmd": "off"})
+    if name == "pad_restore":
+        return ask_daemon({"cmd": "restore"})
     raise ValueError(f"unknown tool {name!r}")
 
 
@@ -137,7 +151,7 @@ def main():
                     msg.get("params", {}).get("protocolVersion",
                                               PROTOCOL_VERSION),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "codexpad", "version": "0.5.1"}})
+                "serverInfo": {"name": "codexpad", "version": VERSION}})
         elif method == "tools/list":
             reply(msg_id, {"tools": TOOLS})
         elif method == "tools/call":

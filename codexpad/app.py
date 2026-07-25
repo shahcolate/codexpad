@@ -524,6 +524,7 @@ it needs you, green when it's done.</p>
         <button onclick="demo()">▶ Demo</button>
         <button onclick="off()">⏻ Off</button>
         <button id="handoff" onclick="handoff()">⇆ Hand pad to Codex</button>
+        <button onclick="restore()" title="Relight every lighting zone. Use when the pad looks dead everywhere — including in the ChatGPT app.">✚ Restore lighting</button>
       </div>
       <label class="hint" style="display:block;margin-top:.7rem">
         <input type="checkbox" id="autohand">
@@ -673,6 +674,11 @@ async function party() {
   say(r.error || "🌈 press the dial to end the party");
 }
 async function off() { const r = await api("/api/off", {}); say(r.error || "all off"); }
+async function restore() {
+  const r = await api("/api/restore", {});
+  say(r.error || ("lighting zones relit: " + ((r.zones || []).join(", ") || "none") +
+                  " — check the pad, and the ChatGPT app if it was dark there too"));
+}
 let padPaused = false;
 async function handoff() {
   const r = await api(padPaused ? "/api/resume" : "/api/pause", {});
@@ -1008,6 +1014,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(ask_daemon({"cmd": "pause"}))
         elif self.path == "/api/resume":
             self._send(ask_daemon({"cmd": "resume"}))
+        elif self.path == "/api/restore":
+            self._send(ask_daemon({"cmd": "restore"}))
         elif self.path == "/api/hook":
             # relay for sessions that can't reach the unix socket themselves
             # (remote/cloud Claude Code over an SSH tunnel): same shape as

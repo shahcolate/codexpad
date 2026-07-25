@@ -334,6 +334,39 @@ frames are sent fire-and-forget, so the method's reply and error behaviour are u
 the confirmation is visual. The `keys` zone, the `s` and `m` fields, and effects beyond
 solid have not been exercised at all.
 
+#### ⚠️ `rgbcfg` is configuration, and it stays written
+
+The name is the warning: `thstatus` is per-thread **status**, `rgbcfg` is zone
+**config**. A value written to a zone is not a transient assertion that ends when your
+process does — it persists, and it persists *for every host*. Write `{"e": 0, "b": 0}`
+to a zone and the zone is dark for the vendor's own client too, with nothing in that
+client's UI to undo it.
+
+This is easy to hit by accident, because "stop showing my indicator" reads naturally as
+"write brightness 0", and because the zones are exactly the two most visible parts of
+the pad: `ambient` is also the firmware's transport indicator (blue on BLE, white on
+wired), so a zeroed ring removes the only way to read which bus the pad is on. A client
+that darkens both zones leaves a pad that looks, to its owner, bricked.
+
+Interoperability rules that follow:
+
+1. **Never release a zone by zeroing it.** Restore a lit baseline instead — `{"e": 1,
+   "b": 1}` at minimum. codexpad does this via its `zones` config, and exposes
+   `python -m codexpad.daemon --restore` as a rescue for pads already in this state.
+2. **Prefer not to pin `c` on `ambient`.** The firmware drives the ring's own colour;
+   restoring `e` and `b` and leaving `c` alone hands that back.
+3. **Restore before releasing the device**, not after — once the vendor client has the
+   pad, you have no handle to write through.
+
+**Status of the persistence claim.** That values written to a zone survive the writing
+process is *inferred*, from the method's name, from `thstatus`/`rgbcfg` being separate
+methods at all, and from the observed symptom that a pad whose zones were zeroed stayed
+dark under the vendor client. It was not established by writing a zone, power-cycling
+and reading it back — there is no documented getter for `rgbcfg` to read it back with
+(`sys.status` is not a method; unknown methods return `404`, so the name space can be
+probed). Treat the rules above as the safe behaviour under either reading: restoring a
+lit baseline costs nothing if the values turn out to be transient.
+
 ### 5.4 Other methods
 
 Present on the device; names confirmed but behaviour not characterised:
@@ -388,6 +421,7 @@ across devices or hosts.
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
 | `AG00`–`AG05` physical positions | Verified (stated-order pass, `captures/`) |
 | `v.oai.rgbcfg` `ambient`: split partial updates, `c`/`e`/`b`, effect `1` | Verified — mic ring lights and clears; visual only, replies not read |
+| `v.oai.rgbcfg` zone values persist beyond the writing process | **Inferred** — from the method name, from `thstatus`/`rgbcfg` being distinct, and from a zeroed zone staying dark under the vendor client. Not established by write → power-cycle → read-back; no `rgbcfg` getter is known |
 | `v.oai.rgbcfg` `ambient` colours other than `0xFF0000` | Not tested (red does rule out a byte swap) |
 | `v.oai.rgbcfg` zone/field names beyond those exercised | From the vendor client's schema, not probed |
 | `v.oai.rgbcfg` `keys` zone, `s`/`m`, non-solid effects | Not tested |
