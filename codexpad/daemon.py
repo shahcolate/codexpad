@@ -135,7 +135,19 @@ _seq = [0]
 _trim = [1.0]                 # global brightness trim, dial-adjustable 0.1-1.0
 _stick = [None]               # flick currently held, so one push fires once
 _paused = [False]             # True: the vendor client owns the pad
-_paused_by = [""]             # "auto" (ChatGPT watcher) | "manual" (button)
+_paused_by = [""]             # who paused: see AUTO_REASONS
+_paused_at = [0.0]            # when, so a handoff can be given time to land
+
+# Why the pad was handed over, and what that implies for taking it back.
+#   "manual" — a person clicked Hand pad to Codex. Never auto-resumed.
+#   "auto"   — the watcher saw the vendor client running. Resumed the moment
+#              it isn't.
+#   "key"    — the ✦ Codex key was pressed. Also self-healing, but the app
+#              usually isn't up YET: the press is what makes you go open it.
+#              Reclaiming on the next 3s tick would undo the handoff before
+#              ChatGPT finished launching, so this one gets a grace window.
+AUTO_REASONS = ("auto", "key")
+KEY_HANDOFF_GRACE_S = 90
 _lock = threading.RLock()     # serialises HID writes and the slot tables
 
 # Pause must survive a daemon restart: the login app supervises the daemon
@@ -204,7 +216,7 @@ def read_pause_flag():
         age = time.time() - float(info.get("at") or 0)
     except (ValueError, TypeError):
         return True, raw or "manual"  # pre-0.6 flag: a bare reason string
-    if reason == "auto" and age > AUTO_PAUSE_MAX_S:
+    if reason in AUTO_REASONS and age > AUTO_PAUSE_MAX_S:
         print(f"  pause   ignoring a stale auto-handoff flag "
               f"({int(age / 3600)}h old) — taking the pad back", flush=True)
         clear_pause_flag()
@@ -484,12 +496,30 @@ def _direction(a):
     return "W"
 
 
+_focus_cycle = [0]
+
+
+def _cycle_focus(direction):
+    """Stick session navigation: emit a FOCUS for the next/previous owned
+    session — the panel raises its window. The pad becomes a session dial."""
+    with _lock:
+        owned = sorted(_slots.items(), key=lambda kv: kv[1])   # (cwd, slot)
+    if not owned:
+        return
+    _focus_cycle[0] = (_focus_cycle[0] + direction) % len(owned)
+    cwd, slot = owned[_focus_cycle[0]]
+    emit_event({"t": "FOCUS", "cwd": cwd,
+                "state": _slot_state.get(slot) or "idle"})
+    print(f"  stick   focus -> slot {slot} {cwd}", flush=True)
+
+
 def flick(a, d):
     """Quantise stick deflection into one bindable flick per push.
 
     The stick streams v.oai.rad continuously while deflected, so this fires
     once when deflection crosses 0.7 and re-arms only after it falls below
     0.3 -- the hysteresis stops a wobbling hold from machine-gunning events.
+    East/west default to session navigation unless the user bound them.
     """
     if _stick[0] is not None:
         if d < 0.3:
@@ -501,6 +531,10 @@ def flick(a, d):
         print(f"  flick   {name} (a={a:.2f})", flush=True)
         if name in COMMANDS:
             run_command(name, None, None)
+        elif name == "STICK_E":
+            _cycle_focus(+1)
+        elif name == "STICK_W":
+            _cycle_focus(-1)
 
 
 def zone_write(handle, zone, fields):
@@ -714,6 +748,18 @@ def dispatch(handle, msg):
     elif key == "ACT08" and APPROVE_FROM_PAD[0]:
         print("  press   ACT08 (decline -> Esc)", flush=True)
         emit_event({"t": "DECLINE"})
+    elif key == "ACT12" and key not in COMMANDS:
+        # the Codex key does the obvious: hand the pad to Codex. Self-healing
+        # — the watcher takes the pad back when ChatGPT isn't running
+        # (accidental press included) — but tagged "key" rather than "auto",
+        # because when you press this the app is usually not up YET. An
+        # "auto" pause is reclaimed on the next 3s tick, which would undo the
+        # handoff while ChatGPT was still launching; "key" gets a grace
+        # window first. One-way from the pad by nature: once released, the
+        # daemon can't hear keys.
+        print("  press   ACT12 (hand pad to Codex)", flush=True)
+        handle_request(handle, {"cmd": "pause", "by": "key"})
+        return
     elif key == "ENC_CW":
         trim(handle, +0.1)
     elif key == "ENC_CC":
@@ -938,6 +984,7 @@ def take_back(handle, why):
     with _lock:
         _paused[0] = False
         _paused_by[0] = ""
+        _paused_at[0] = 0.0
         lit = [(s, st) for s, st in _slot_state.items()
                if st and st != "off"]
     clear_pause_flag()
@@ -952,7 +999,7 @@ def vendor_watcher(handle):
     while True:
         time.sleep(3)
         try:
-            auto_paused = _paused[0] and _paused_by[0] == "auto"
+            auto_paused = _paused[0] and _paused_by[0] in AUTO_REASONS
             if not AUTO_HANDOFF[0]:
                 # Turning auto-handoff off while it was in effect used to
                 # strand the daemon: the only code that could undo an auto
@@ -966,6 +1013,9 @@ def vendor_watcher(handle):
             if running and not _paused[0]:
                 hand_over(handle, "auto")
             elif not running and auto_paused:
+                if (_paused_by[0] == "key"
+                        and time.time() - _paused_at[0] < KEY_HANDOFF_GRACE_S):
+                    continue    # you just pressed ✦; give ChatGPT time to open
                 take_back(handle, "vendor client quit")
         except Exception as exc:
             print(f"  handoff err {exc}", flush=True)
@@ -1079,6 +1129,7 @@ def hand_over(handle, reason):
         _slot_state.update(snapshot)   # keep tracking; resume repaints
         _paused[0] = True
         _paused_by[0] = reason
+        _paused_at[0] = time.time()
     _nag_on[0] = False
     if isinstance(handle, Device):
         handle.release()
@@ -1192,6 +1243,10 @@ def handle_request(handle, req):
                         "paused_by": _paused_by[0],
                         "zones_touched": sorted(_zones_touched),
                         "vendor_running": vendor_client_running(),
+                        # tells the panel to keep its hands off the handoff:
+                        # this daemon runs the watcher itself, and only it
+                        # knows about the ✦-key grace window
+                        "handoff_owner": "daemon",
                         "device": (handle.status() if isinstance(handle, Device)
                                    else {"connected": True, "seen": True,
                                          "error": ""}),
@@ -1227,7 +1282,8 @@ def handle_request(handle, req):
             for slot, state in lit:
                 set_slot(handle, slot, state)
         elif cmd == "pause":
-            hand_over(handle, "auto" if req.get("auto") else "manual")
+            reason = req.get("by") or ("auto" if req.get("auto") else "manual")
+            hand_over(handle, reason if reason in AUTO_REASONS else "manual")
         elif cmd == "resume":
             take_back(handle, "asked for the pad back")
         elif cmd == "restore":
@@ -1443,6 +1499,7 @@ def main():
         return
 
     _paused[0], _paused_by[0] = read_pause_flag()   # a restart forgets nothing
+    _paused_at[0] = time.time()   # unknown age; the flag's own expiry governs
     if _paused[0]:
         print(f"  pause   still in effect from before the restart "
               f"({_paused_by[0]}) — the pad belongs to the vendor client "

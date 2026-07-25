@@ -60,6 +60,28 @@ And it flows the other way — **the pad drives Claude**:
 | A **working or amber** key | that session's window comes to the front (auto-detects Claude / Cursor / iTerm / VS Code / Terminal, or your own `focus_command`) |
 | **✓** / **✗** (opt-in) | Enter / Escape typed into the focused prompt — approve or decline without touching the keyboard |
 | The **mic bar** | your `mic_on_command` fires in your login session — one click wires it to macOS dictation |
+| **✦** (the Codex key) | hands the pad to Codex — and it comes back when ChatGPT quits |
+| **Stick** east / west | cycles focus through your active sessions, one flick per session |
+| **⑂** (new chat) | opens the Claude app (fresh-install default; rebind to anything) |
+
+## Parity scorecard
+
+Every control, side by side — what the vendor stack does with Codex, what
+codexpad does with Claude:
+
+| Control | With Codex (ChatGPT app) | With Claude (codexpad) |
+|---|---|---|
+| 6 Agent Keys | thread status lights | session status lights **+ press to ack / jump to the window** |
+| Dial | brightness | brightness trim **+ press = acknowledge everything** |
+| Mic bar | native voice input | hold / double-press-latch, ring indicator, dictation into the prompt |
+| ✓ / ✗ | approve / decline | approve / decline the focused prompt (opt-in) |
+| ⑂ new chat | new Codex chat | opens Claude (default binding, rebindable) |
+| ✦ Codex key | opens Codex | **hands the pad to Codex** — the two stacks share one device |
+| ⚡ fast mode | Codex fast mode | bindable (no safe automatic analog — `/fast` would need keystroke injection; recipe welcome) |
+| Stick | — | session navigation: E/W cycles focus; N/S bindable |
+| Touch control | BLE channel / wired switch | same — it's the physical Claude↔Codex transport switch |
+
+The one honest asterisk is ⚡ — everything else answers, lights, or acts.
 
 ## Install
 
@@ -237,7 +259,7 @@ Zero clicks, on by default (the checkbox under the pad mockup turns it off),
 and state survives the round-trip. True *simultaneous* use needs the
 vendor's layer system — roadmap.
 
-> The watcher lives in the daemon as of 0.7.0. It used to live only in the
+> The watcher lives in the daemon as of 0.8.0. It used to live only in the
 > control panel, which meant a daemon started any other way — the root
 > wrapper, `service.sh`, `sudo python -m codexpad.daemon` — never let go of
 > the pad at all, and held it against the vendor client indefinitely.
@@ -250,10 +272,19 @@ hammer they are:
 | You want | Do this |
 |---|---|
 | The pad back **right now**, this once | Panel → **⇤ Take pad back**. Equivalent: `printf '{"cmd":"resume"}' \| nc -U /tmp/codexpad.sock` |
-| To hand it *to* Codex deliberately | Panel → **⇆ Hand pad to Codex**. A manual handoff is never auto-resumed — that was a person deciding, so codexpad leaves it alone until you say otherwise |
+| To hand it *to* Codex deliberately | Press **✦** on the pad, or Panel → **⇆ Hand pad to Codex** |
 | codexpad to **stop yielding** to ChatGPT entirely | Untick **auto-handoff** under the pad mockup, or set `"auto_handoff": false`. If a handoff was in effect, switching it off takes the pad back rather than stranding it |
 | ChatGPT to keep the pad **permanently** | Leave auto-handoff on and quit codexpad: `sudo codexpad-stop`. It restores the zones and releases the device on the way out |
 | The pad back from a **stuck** handoff | See below |
+
+Those two handoffs behave differently on the way back, deliberately:
+
+- **✦ on the pad** self-heals. You press it *before* opening ChatGPT, so the
+  daemon holds the handoff for 90 seconds to let the app launch, then
+  reclaims the pad if it never showed up. An accidental press costs you a
+  minute and a half, not a session.
+- **⇆ in the panel** is never auto-resumed. That was a person deciding, so
+  codexpad leaves it alone until you say otherwise.
 
 **When "Take pad back" doesn't work.** The pause is written to a flag file so
 it survives a daemon restart mid-handoff — the login app respawns the daemon
@@ -265,7 +296,7 @@ printf '{"cmd":"status"}' | nc -U /tmp/codexpad.sock   # paused? paused_by?
 sudo rm -f /tmp/codexpad.sock.paused                   # the escape hatch
 ```
 
-0.7.0 makes stranding much harder: the flag records *who* paused and *when*,
+0.8.0 makes stranding much harder: the flag records *who* paused and *when*,
 an automatic handoff older than six hours is ignored on start-up, the flag is
 world-writable so a user-owned daemon can clear one a root daemon wrote, and
 if it genuinely can't be cleared the daemon says so in the log instead of
@@ -469,7 +500,7 @@ are the pad being on the wrong bus:
 | Symptom | It means | Fix |
 |---|---|---|
 | **Nothing lights at all — not for codexpad, not for ChatGPT, not the ring** | A lighting **zone** was left configured dark. `v.oai.rgbcfg` is device *config*, not transient state: it stays written, for every host | **`python -m codexpad.daemon --restore`** (or ✚ Restore lighting in the panel). See [the pad went dark everywhere](#the-pad-went-dark-everywhere) |
-| Keys change colour but stay dim, or don't light after using the dial | Fixed on daemons ≥ 0.7.0. The brightness frame was one byte over the 61-byte limit and was **silently dropped**, so the key kept its old brightness — from `off`, zero | Update and restart the daemon; the panel names mixed builds |
+| Keys change colour but stay dim, or don't light after using the dial | Fixed on daemons ≥ 0.8.0. The brightness frame was one byte over the 61-byte limit and was **silently dropped**, so the key kept its old brightness — from `off`, zero | Update and restart the daemon; the panel names mixed builds |
 | Pad lights up only when the ChatGPT app opens | It's on **Bluetooth**; the vendor app drives it over BLE | Quit ChatGPT, *Forget* the pad in Bluetooth settings, tap to the **white ring** |
 | `probe.py enumerate` lists it but nothing can open it | Check the bus tag — BLE HID looks identical to USB | `[BLUETOOTH]` → tap to wired; want `[USB]` |
 | Flashes blue when unplugged; "wired" doesn't stick | BLE advertising; the mode reverts on power loss, bonds dominate | Re-check for white after any unplug |
@@ -484,8 +515,8 @@ are the pad being on the wrong bus:
 | Keys stay lit after tests | The device keeps its last lighting | Any daemon start blanks; `--off`; press green/red keys |
 | "Rainbow" turned everything red / breath didn't breathe | The undocumented `s` field is the animation switch and it was missing | Update — codexpad sends `s` automatically now; effects genuinely animate |
 | Snake or gradient on an Agent Key does nothing | They're strip effects — ring and `keys` zones only | Use solid/breath/rainbow per-key; snake lives on the ring |
-| ChatGPT stopped driving the pad since codexpad arrived | The daemon held the device / stomped the vendor lights | Update — auto-handoff releases the pad while ChatGPT runs, and on daemons ≥ 0.7.0 it runs **in the daemon**, so it works without the panel. For BLE instead: tap the touch key to a blue-ring channel and re-pair |
-| Everything is dead and the panel says the pad is handed to Codex, but ChatGPT isn't running | A stale pause flag. Before 0.7.0 a root-written flag couldn't be cleared by a later user daemon, and "Take pad back" reported success while the flag stayed | Update; 0.7.0 expires stale auto-pauses and says so when it can't clear the flag. By hand: `sudo rm -f /tmp/codexpad.sock.paused` |
+| ChatGPT stopped driving the pad since codexpad arrived | The daemon held the device / stomped the vendor lights | Update — auto-handoff releases the pad while ChatGPT runs, and on daemons ≥ 0.8.0 it runs **in the daemon**, so it works without the panel. For BLE instead: tap the touch key to a blue-ring channel and re-pair |
+| Everything is dead and the panel says the pad is handed to Codex, but ChatGPT isn't running | A stale pause flag. Before 0.8.0 a root-written flag couldn't be cleared by a later user daemon, and "Take pad back" reported success while the flag stayed | Update; 0.8.0 expires stale auto-pauses and says so when it can't clear the flag. By hand: `sudo rm -f /tmp/codexpad.sock.paused` |
 | Hooks don't fire | Claude Code reads settings at launch | Fully quit and reopen; Desktop: **Code** tab + **Local** environment |
 | Need to stop everything | The app supervises and revives things by design | `sudo codexpad-stop` (daemon only) or `./make_login_app.sh remove` (stops, then uninstalls) |
 
@@ -550,7 +581,8 @@ app's supervisor would otherwise both spawn daemons.)
       rescue, daemon-side handoff, measured frame packing, a test suite
 - [ ] Simultaneous Codex + Claude via the vendor's layer system
 - [ ] Native menu-bar app (panel without the browser)
-- [ ] Joystick session navigation; `keys` zone; `s`/`m` fields (may fix the broken firmware effects)
+- [x] Joystick session navigation (E/W focus cycling); `s` field discovered — effects fixed
+- [ ] `keys` zone as an output surface (amber approve-glow, handoff indicator)
 - [ ] Local Whisper on the mic bar (no macOS dictation dependency)
 - [ ] Windows support (Linux untested but expected to work)
 

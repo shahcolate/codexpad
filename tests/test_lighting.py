@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -387,6 +388,45 @@ class Handoff(unittest.TestCase):
     def test_manual_handoff_is_not_auto(self):
         daemon.hand_over(self.pad, "manual")
         self.assertEqual(daemon.read_pause_flag(), (True, "manual"))
+
+    def test_the_codex_key_gets_a_grace_window(self):
+        """Pressing ✦ hands the pad over so you can go open ChatGPT. The
+        watcher runs every 3s and the app isn't up yet, so without a grace
+        window it would take the pad straight back and the key would do
+        nothing visible."""
+        daemon.handle_request(self.pad, {"cmd": "pause", "by": "key"})
+        self.assertEqual(daemon._paused_by[0], "key")
+        self.assertIn("key", daemon.AUTO_REASONS)   # still self-healing
+        fresh = time.time() - daemon._paused_at[0]
+        self.assertLess(fresh, daemon.KEY_HANDOFF_GRACE_S,
+                        "a just-pressed key handoff must be inside the grace")
+
+    def test_a_watcher_handoff_gets_no_grace(self):
+        """When the watcher pauses, ChatGPT is already running — reclaiming
+        the instant it quits is the whole point, so no delay there."""
+        daemon.hand_over(self.pad, "auto")
+        self.assertEqual(daemon._paused_by[0], "auto")
+
+    def test_pause_reasons_are_validated(self):
+        """An unknown reason must fall back to manual, not invent a state
+        that nothing knows how to resume."""
+        daemon.handle_request(self.pad, {"cmd": "pause", "by": "nonsense"})
+        self.assertEqual(daemon._paused_by[0], "manual")
+
+    def test_legacy_auto_flag_still_pauses(self):
+        daemon.handle_request(self.pad, {"cmd": "pause", "auto": True})
+        self.assertEqual(daemon._paused_by[0], "auto")
+
+    def test_status_claims_handoff_ownership(self):
+        """The panel's watcher stands down on seeing this; two watchers race
+        and the panel doesn't know about the grace window."""
+        st = daemon.handle_request(self.pad, {"cmd": "status"})
+        self.assertEqual(st.get("handoff_owner"), "daemon")
+
+    def test_a_stale_key_handoff_expires_like_an_auto_one(self):
+        with open(daemon.PAUSE_FLAG, "w") as fh:
+            json.dump({"by": "key", "at": 0, "pid": 1}, fh)
+        self.assertEqual(daemon.read_pause_flag(), (False, ""))
 
 
 class ConfigZones(unittest.TestCase):

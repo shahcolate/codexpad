@@ -227,15 +227,24 @@ _codex = {"running": False}
 
 
 def codex_watch_step(running=None):
-    """One tick of the ChatGPT auto-handoff (macOS).
+    """One tick of the ChatGPT auto-handoff (macOS) — legacy daemons only.
 
-    ChatGPT app appears -> pause the daemon (blank + release the device) so
-    the vendor client drives the pad, exactly like before codexpad existed.
-    ChatGPT not running -> undo any AUTO pause, wherever it came from: the
-    daemon persists who paused (auto vs manual), so a stale auto-handoff
-    left over from a restart of either process still resolves here. Manual
-    'Hand pad to Codex' is never auto-resumed — that was a person deciding.
+    The daemon runs this watcher itself now, and says so in its status reply.
+    Two watchers is worse than one: only the daemon knows how long ago the
+    pad was handed over, so only it can honour the ✦-key grace window, and a
+    panel racing it would reclaim the pad while ChatGPT was still launching.
+    So when the daemon owns the handoff, this does nothing.
+
+    Against an older daemon it still works the way it always did: ChatGPT
+    appears -> pause (blank + release the device); ChatGPT not running ->
+    undo any AUTO pause, wherever it came from. Manual 'Hand pad to Codex'
+    is never auto-resumed — that was a person deciding.
     """
+    st = ask_daemon({"cmd": "status"})
+    if "error" in st:
+        return
+    if st.get("handoff_owner") == "daemon":
+        return
     if running is None:
         running = subprocess.run(["pgrep", "-x", "ChatGPT"],
                                  capture_output=True).returncode == 0
@@ -244,18 +253,12 @@ def codex_watch_step(running=None):
     if not config.load().get("auto_handoff", True):
         return
     if running:
-        if not was:
-            st = ask_daemon({"cmd": "status"})
-            if "error" not in st and not st.get("paused"):
-                ask_daemon({"cmd": "pause", "auto": True})
-                print("handoff: ChatGPT opened — pad released to it",
-                      flush=True)
-    else:
-        st = ask_daemon({"cmd": "status"})
-        if "error" not in st and st.get("paused") \
-                and st.get("paused_by") == "auto":
-            ask_daemon({"cmd": "resume"})
-            print("handoff: ChatGPT is closed — pad reclaimed", flush=True)
+        if not was and not st.get("paused"):
+            ask_daemon({"cmd": "pause", "auto": True})
+            print("handoff: ChatGPT opened — pad released to it", flush=True)
+    elif st.get("paused") and st.get("paused_by") in ("auto", "key"):
+        ask_daemon({"cmd": "resume"})
+        print("handoff: ChatGPT is closed — pad reclaimed", flush=True)
 
 
 def codex_watcher():
