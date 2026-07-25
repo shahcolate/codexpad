@@ -314,12 +314,30 @@ def _direction(a):
     return "W"
 
 
+_focus_cycle = [0]
+
+
+def _cycle_focus(direction):
+    """Stick session navigation: emit a FOCUS for the next/previous owned
+    session — the panel raises its window. The pad becomes a session dial."""
+    with _lock:
+        owned = sorted(_slots.items(), key=lambda kv: kv[1])   # (cwd, slot)
+    if not owned:
+        return
+    _focus_cycle[0] = (_focus_cycle[0] + direction) % len(owned)
+    cwd, slot = owned[_focus_cycle[0]]
+    emit_event({"t": "FOCUS", "cwd": cwd,
+                "state": _slot_state.get(slot) or "idle"})
+    print(f"  stick   focus -> slot {slot} {cwd}", flush=True)
+
+
 def flick(a, d):
     """Quantise stick deflection into one bindable flick per push.
 
     The stick streams v.oai.rad continuously while deflected, so this fires
     once when deflection crosses 0.7 and re-arms only after it falls below
     0.3 -- the hysteresis stops a wobbling hold from machine-gunning events.
+    East/west default to session navigation unless the user bound them.
     """
     if _stick[0] is not None:
         if d < 0.3:
@@ -331,6 +349,10 @@ def flick(a, d):
         print(f"  flick   {name} (a={a:.2f})", flush=True)
         if name in COMMANDS:
             run_command(name, None, None)
+        elif name == "STICK_E":
+            _cycle_focus(+1)
+        elif name == "STICK_W":
+            _cycle_focus(-1)
 
 
 def set_ring(handle, on, color=None):
@@ -497,6 +519,14 @@ def dispatch(handle, msg):
     elif key == "ACT08" and APPROVE_FROM_PAD[0]:
         print("  press   ACT08 (decline -> Esc)", flush=True)
         emit_event({"t": "DECLINE"})
+    elif key == "ACT12" and key not in COMMANDS:
+        # the Codex key does the obvious: hand the pad to Codex. Marked auto
+        # so it self-heals — the watcher takes the pad back when ChatGPT
+        # isn't running (accidental press included). One-way from the pad by
+        # nature: once released, the daemon can't hear keys.
+        print("  press   ACT12 (hand pad to Codex)", flush=True)
+        handle_request(handle, {"cmd": "pause", "auto": True})
+        return
     elif key == "ENC_CW":
         trim(handle, +0.1)
     elif key == "ENC_CC":

@@ -9,6 +9,7 @@ to ints on load (0xRRGGBB, verified on hardware, no byte swap).
 import copy
 import json
 import os
+import sys
 
 SOCK_PATH = os.environ.get("CODEXPAD_SOCK", "/tmp/codexpad.sock")
 
@@ -46,7 +47,11 @@ DEFAULTS = {
         "rainbow": {"color": "FFFFFF", "effect": 3, "brightness": 1.0},
         "off":     {"color": "000000", "effect": 0, "brightness": 0.0},
     },
-    "commands": {},
+    # Fresh installs get the parity default: the fork (new chat) key opens
+    # Claude, mirroring its Codex meaning. Overridden entirely by any saved
+    # "commands" table.
+    "commands": ({"ACT09": "open -a 'Claude'"}
+                 if sys.platform == "darwin" else {}),
     "mic_color": "FF0000",
     # Run by the PANEL in your login session when the mic opens/closes --
     # the place for dictation triggers and AppleScript, which a root daemon

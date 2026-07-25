@@ -142,7 +142,7 @@ def main():
                     msg.get("params", {}).get("protocolVersion",
                                               PROTOCOL_VERSION),
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "codexpad", "version": "0.6.0"}})
+                "serverInfo": {"name": "codexpad", "version": "0.7.0"}})
         elif method == "tools/list":
             reply(msg_id, {"tools": TOOLS})
         elif method == "tools/call":

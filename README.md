@@ -60,6 +60,28 @@ And it flows the other way — **the pad drives Claude**:
 | A **working or amber** key | that session's window comes to the front (auto-detects Claude / Cursor / iTerm / VS Code / Terminal, or your own `focus_command`) |
 | **✓** / **✗** (opt-in) | Enter / Escape typed into the focused prompt — approve or decline without touching the keyboard |
 | The **mic bar** | your `mic_on_command` fires in your login session — one click wires it to macOS dictation |
+| **✦** (the Codex key) | hands the pad to Codex — and it comes back when ChatGPT quits |
+| **Stick** east / west | cycles focus through your active sessions, one flick per session |
+| **⑂** (new chat) | opens the Claude app (fresh-install default; rebind to anything) |
+
+## Parity scorecard
+
+Every control, side by side — what the vendor stack does with Codex, what
+codexpad does with Claude:
+
+| Control | With Codex (ChatGPT app) | With Claude (codexpad) |
+|---|---|---|
+| 6 Agent Keys | thread status lights | session status lights **+ press to ack / jump to the window** |
+| Dial | brightness | brightness trim **+ press = acknowledge everything** |
+| Mic bar | native voice input | hold / double-press-latch, ring indicator, dictation into the prompt |
+| ✓ / ✗ | approve / decline | approve / decline the focused prompt (opt-in) |
+| ⑂ new chat | new Codex chat | opens Claude (default binding, rebindable) |
+| ✦ Codex key | opens Codex | **hands the pad to Codex** — the two stacks share one device |
+| ⚡ fast mode | Codex fast mode | bindable (no safe automatic analog — `/fast` would need keystroke injection; recipe welcome) |
+| Stick | — | session navigation: E/W cycles focus; N/S bindable |
+| Touch control | BLE channel / wired switch | same — it's the physical Claude↔Codex transport switch |
+
+The one honest asterisk is ⚡ — everything else answers, lights, or acts.
 
 ## Install
 
@@ -414,7 +436,8 @@ app's supervisor would otherwise both spawn daemons.)
 - [x] Remote-session relay (`/api/hook`), pip install from git, session stats
 - [ ] Simultaneous Codex + Claude via the vendor's layer system
 - [ ] Native menu-bar app (panel without the browser)
-- [ ] Joystick session navigation; `keys` zone; `s`/`m` fields (may fix the broken firmware effects)
+- [x] Joystick session navigation (E/W focus cycling); `s` field discovered — effects fixed
+- [ ] `keys` zone as an output surface (amber approve-glow, handoff indicator)
 - [ ] Local Whisper on the mic bar (no macOS dictation dependency)
 - [ ] Windows support (Linux untested but expected to work)
 
