@@ -346,9 +346,14 @@ reply and error behaviour are unknown; the confirmation is visual.
 the same split partial updates with `c`/`e`/`b`/`s` — solid colours at chosen
 brightness light it, snake runs on it with `s`, and breath without `s` stays dark,
 exactly matching the per-key `s` rule (§5.2). Ambient-ring effect behaviour is also
-mapped in §5.2's zone table. Which physical LEDs the `keys` zone addresses (Command
-Keys, all keycaps, or the full backlight) is recorded from a single session and needs
-a finer description; the `m` field did nothing in any zone.
+mapped in §5.2's zone table. The `m` field did nothing in any zone.
+
+**LED addressing limits, from a stated-order mapping session:** `v.oai.thstatus`
+accepts exactly ids `0`–`5` (the six Agent Keys) — a full sweep of ids `0`–`15`,
+solid green, lit nothing beyond them, so the remaining LEDs are *not* reachable as
+thread ids. The `keys` zone is driven only as a whole through `rgbcfg`; its LED
+chain order was observed by running a slow snake (`e:2, s:0.3`) across it, which
+**starts at the ⑂ (fork / new-chat) key** — remaining crawl order to be recorded.
 
 ### 5.4 Other methods
 
