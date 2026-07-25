@@ -223,7 +223,7 @@ def install_service():
                     + SERVICE_PLIST}
 
 
-_codex = {"running": False, "auto_paused": False}
+_codex = {"running": False}
 
 
 def codex_watch_step(running=None):
@@ -231,8 +231,10 @@ def codex_watch_step(running=None):
 
     ChatGPT app appears -> pause the daemon (blank + release the device) so
     the vendor client drives the pad, exactly like before codexpad existed.
-    ChatGPT quits -> resume, repaint Claude states. Only ever resumes a pause
-    it made itself, so a manual 'Hand pad to Codex' stays handed off.
+    ChatGPT not running -> undo any AUTO pause, wherever it came from: the
+    daemon persists who paused (auto vs manual), so a stale auto-handoff
+    left over from a restart of either process still resolves here. Manual
+    'Hand pad to Codex' is never auto-resumed — that was a person deciding.
     """
     if running is None:
         running = subprocess.run(["pgrep", "-x", "ChatGPT"],
@@ -241,16 +243,19 @@ def codex_watch_step(running=None):
     _codex["running"] = running
     if not config.load().get("auto_handoff", True):
         return
-    if running and not was:
+    if running:
+        if not was:
+            st = ask_daemon({"cmd": "status"})
+            if "error" not in st and not st.get("paused"):
+                ask_daemon({"cmd": "pause", "auto": True})
+                print("handoff: ChatGPT opened — pad released to it",
+                      flush=True)
+    else:
         st = ask_daemon({"cmd": "status"})
-        if "error" not in st and not st.get("paused"):
-            ask_daemon({"cmd": "pause"})
-            _codex["auto_paused"] = True
-            print("handoff: ChatGPT opened — pad released to it", flush=True)
-    elif was and not running and _codex["auto_paused"]:
-        _codex["auto_paused"] = False
-        ask_daemon({"cmd": "resume"})
-        print("handoff: ChatGPT quit — pad is Claude's again", flush=True)
+        if "error" not in st and st.get("paused") \
+                and st.get("paused_by") == "auto":
+            ask_daemon({"cmd": "resume"})
+            print("handoff: ChatGPT is closed — pad reclaimed", flush=True)
 
 
 def codex_watcher():
@@ -784,8 +789,9 @@ function paintHw(s) {
   }
   const d = s.device || {connected: true};
   if (s.paused) {
-    hw("warn", "● pad handed to Codex — ChatGPT owns the lights. It comes back " +
-       "automatically when ChatGPT quits (auto-handoff), or click Take pad back.");
+    hw("warn", s.paused_by === "auto"
+       ? "● pad handed to Codex automatically — it comes back the moment ChatGPT quits."
+       : "● pad handed to Codex (manual) — click Take pad back when you want it.");
   } else if (d.connected) {
     hw("ok", "● daemon running · pad connected — buttons below act on the real pad.");
   } else if (d.seen) {

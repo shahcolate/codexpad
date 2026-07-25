@@ -109,6 +109,7 @@ _seq = [0]
 _trim = [1.0]                 # global brightness trim, dial-adjustable 0.1-1.0
 _stick = [None]               # flick currently held, so one push fires once
 _paused = [False]             # True: the vendor client owns the pad
+_paused_by = [""]             # "auto" (ChatGPT watcher) | "manual" (button)
 _lock = threading.RLock()     # serialises HID writes and the slot tables
 
 # Pause must survive a daemon restart: the login app supervises the daemon
@@ -753,6 +754,7 @@ def handle_request(handle, req):
             with _lock:
                 by_slot = {s: c for c, s in _slots.items()}
                 return {"ok": 1, "trim": _trim[0], "paused": _paused[0],
+                        "paused_by": _paused_by[0],
                         "device": (handle.status() if isinstance(handle, Device)
                                    else {"connected": True, "seen": True,
                                          "error": ""}),
@@ -800,14 +802,18 @@ def handle_request(handle, req):
                 _paused[0] = True
             if isinstance(handle, Device):
                 handle.release()
-            try:                      # survive a daemon restart mid-handoff
-                open(PAUSE_FLAG, "w").close()
-            except OSError:
+            _paused_by[0] = "auto" if req.get("auto") else "manual"
+            try:                      # survive a daemon restart mid-handoff —
+                with open(PAUSE_FLAG, "w") as fh:
+                    fh.write(_paused_by[0])   # WITH its provenance, so the
+            except OSError:                   # watcher can undo stale autos
                 pass
-            print("  pause   pad handed to the vendor client", flush=True)
+            print(f"  pause   pad handed to the vendor client "
+                  f"({_paused_by[0]})", flush=True)
         elif cmd == "resume":
             with _lock:
                 _paused[0] = False
+                _paused_by[0] = ""
                 lit = [(s, st) for s, st in _slot_state.items()
                        if st and st != "off"]
             try:
@@ -1009,7 +1015,13 @@ def main():
 
     _paused[0] = os.path.exists(PAUSE_FLAG)   # a restart forgets nothing
     if _paused[0]:
-        print("  pause   still in effect from before the restart", flush=True)
+        try:
+            with open(PAUSE_FLAG) as fh:
+                _paused_by[0] = fh.read().strip() or "manual"
+        except OSError:
+            _paused_by[0] = "manual"
+        print(f"  pause   still in effect from before the restart "
+              f"({_paused_by[0]})", flush=True)
 
     if args.wait:
         # Socket first, device whenever it shows up: while the pad is in BLE
