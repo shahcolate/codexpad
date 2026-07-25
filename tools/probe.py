@@ -15,6 +15,8 @@ protocol against your own device before trusting anything in that document.
     python tools/probe.py ring                  effect sweep on the ambient ring
     python tools/probe.py keys                  first probe of the unexplored
                                                 'keys' zone - watch the pad!
+    python tools/probe.py ledmap                guided LED mapping: id sweep
+                                                0-15 + slow snakes per zone
 
 The four sweeps go through the RUNNING DAEMON's socket - the daemon keeps
 the device, no sudo needed. Everything else opens the device directly, which
@@ -243,6 +245,43 @@ def cmd_keyszone(_slot=None):
           "changed - or 'nothing at all', which is also an answer.")
 
 
+def cmd_ledmap(_=None):
+    """Map the pad's LEDs the way the inputs were mapped: one at a time.
+
+    Phase A: does thstatus accept ids beyond the six Agent Keys? Each id
+    0-15 lights green for 3s - note which PHYSICAL light answers.
+    Phase B/C: a slow snake on the keys zone / ambient ring visits every
+    LED in chain order - watch the crawl and the map draws itself.
+    """
+    pong = _need_daemon()
+    print(f"daemon {pong.get('v', '?')} - LED mapping session, three phases.\n")
+    print("PHASE A  thstatus id sweep 0-15, GREEN, 3s each. ids 0-5 should be")
+    print("the six Agent Keys; anything lighting beyond id 5 is a discovery.")
+    input("Enter to start...")
+    for i in range(16):
+        ask_daemon({"cmd": "preview", "slot": i, "color": "00FF00",
+                    "effect": 1, "brightness": 1.0})
+        print(f"  id {i:2d}  <- which light came on (if any)?")
+        time.sleep(3)
+        ask_daemon({"cmd": "preview", "slot": i, "color": "000000",
+                    "effect": 0, "brightness": 0})
+    print("\nPHASE B  slow snake on the KEYS zone, ~15s. Watch which LEDs it")
+    print("visits and in what order - that order is the LED chain.")
+    input("Enter to start...")
+    ask_daemon({"cmd": "zone", "zone": "keys",
+                "fields": {"c": "00A0FF", "e": 2, "b": 1, "s": 0.3}})
+    time.sleep(15)
+    ask_daemon({"cmd": "zone", "zone": "keys", "fields": {"e": 0, "b": 0}})
+    print("\nPHASE C  slow snake on the AMBIENT ring, ~12s. Count the segments.")
+    input("Enter to start...")
+    ask_daemon({"cmd": "zone", "zone": "ambient",
+                "fields": {"c": "00A0FF", "e": 2, "b": 1, "s": 0.3}})
+    time.sleep(12)
+    ask_daemon({"cmd": "zone", "zone": "ambient", "fields": {"e": 0, "b": 0}})
+    print("\ndone. Report: phase A id -> light table, phase B crawl order,")
+    print("phase C segment count. That's the whole LED map.")
+
+
 def cmd_effects(slot="0"):
     slot = int(slot)
     pong = _need_daemon()
@@ -287,6 +326,8 @@ def main():
         cmd_ringfx(*rest)
     elif cmd == "keys":
         cmd_keyszone(*rest)
+    elif cmd == "ledmap":
+        cmd_ledmap(*rest)
     else:
         print(__doc__)
 
