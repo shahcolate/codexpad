@@ -386,7 +386,7 @@ supervision; only the daemon spawn is the sore spot):
 
 ```bash
 cat >> ~/.zshrc <<'EOF'
-codexpad() { sudo -n /usr/local/bin/codexpad-daemon & (cd ~/codex-micro-for-claude && python -m codexpad.app --no-daemon >/dev/null 2>&1 &); sleep 1; open http://127.0.0.1:8378; }
+codexpad() { sudo -n /usr/local/bin/codexpad-daemon & (cd ~/codexpad && python -m codexpad.app --no-daemon >/dev/null 2>&1 &); sleep 1; open http://127.0.0.1:8378; }
 EOF
 ```
 
