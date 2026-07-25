@@ -192,7 +192,7 @@ def set_slot(handle, slot, state):
     decimal colour exceeds the 61-byte body limit. Partial updates are legal
     (omitted fields are left unchanged on the device), so this is safe.
     """
-    color, effect, brightness = STATES[state]
+    color, effect, brightness, speed = STATES[state]
     if state == "rainbow":
         color = RAINBOW_HUES[slot % len(RAINBOW_HUES)]
     with _lock:
@@ -200,6 +200,11 @@ def set_slot(handle, slot, state):
         _rpc(handle, "v.oai.thstatus", [{"id": slot, "c": color}])
         _rpc(handle, "v.oai.thstatus",
              [{"id": slot, "e": effect, "b": round(brightness * _trim[0], 2)}])
+        if speed and effect not in (0, 1):
+            # the animation switch, hardware-discovered: without `s` breath
+            # renders solid and rainbow renders red. Own frame — e+b+s in one
+            # would exceed the 61-byte body and be dropped.
+            _rpc(handle, "v.oai.thstatus", [{"id": slot, "s": speed}])
 
 
 # --- slot allocation -------------------------------------------------------
@@ -359,7 +364,7 @@ def pulse(handle, slot):
         state = _slot_state.get(slot)
         if state != "working":
             return
-        _, _, brightness = STATES[state]
+        _, _, brightness, _ = STATES[state]
         _rpc(handle, "v.oai.thstatus",
              [{"id": slot, "b": round(max(0.15, brightness * _trim[0] * 0.3), 2)}])
 

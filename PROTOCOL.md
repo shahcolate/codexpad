@@ -297,26 +297,33 @@ confirming no byte swap.
 
 ### 5.2 Lighting effects
 
-| Value | Effect (per the vendor client's enumeration) | On hardware (Agent Key zone, fw v0.4.1) |
-|---|---|---|
-| `0` | Off | ✅ confirmed |
-| `1` | Solid | ✅ confirmed |
-| `2` | Snake — a lit segment travels the strip | ❌ no animation observed |
-| `3` | Rainbow — cycles the hue spectrum | ⚠️ **solid red**, ignoring `c` — reproduced across two sweeps and three colours |
-| `4` | Breath — fades in and out | ❌ renders as plain solid, no animation |
-| `5` | Gradient | ❌ no animation observed |
-| `6` | Shallow breath — as breath, but floors at half brightness | ❌ renders as plain solid |
-| `7`–`9` | (not in the vendor enumeration) | swept; nothing noteworthy recorded |
+**The `s` field is the animation switch.** A three-sweep hardware session
+(ids 0–9 with `c`/`e`/`b` only, then the same effects with `s`/`m`, on all
+three zones) established the rule this document previously missed: **without
+`s`, no effect animates anywhere** — breath renders as plain solid and
+rainbow renders as solid red. With `s` riding along (any tested value:
+0.2–5), the animated effects run. The vendor client evidently always sends
+`s`; every earlier "broken effect" observation was a missing parameter.
 
-A full id sweep (0–9, white and blue, `c`/`e`/`b` fields only) found that
-per-key thread lighting honours exactly two effects: **off and solid**. Every
-animated effect in the vendor enumeration either renders as solid (`4`, `6`)
-or shows nothing distinct (`2`, `5`), and `3` is hard-coded solid red
-regardless of the requested colour. Open questions, in test order: does the
-undocumented `s` (speed?) field switch animation on (probe `speeds`); does the
-`ambient` zone animate where keys don't (probe `ring`); is the `keys` zone a
-separate lighting engine (probe `keys`). Sweeps run through a live daemon —
-`python tools/probe.py <sweep>` — so any pad owner can extend this table.
+Effect ids vs zones, fw v0.4.1, all observed on hardware:
+
+| Value | Effect | Per-key (`thstatus`), with `s` | `ambient` ring | `keys` zone |
+|---|---|---|---|---|
+| `0` | Off | ✅ | ✅ | ✅ (clears) |
+| `1` | Solid | ✅ (no `s` needed) | ✅ (no `s` needed) | ✅ (no `s` needed) |
+| `2` | Snake | ❌ dead even with `s` | ✅ **with `s`** (without: lit, malformed) | ✅ with `s` |
+| `3` | Rainbow | ✅ cycles hues **with `s`**; solid red without | ✅ | untested |
+| `4` | Breath | ✅ breathes **with `s`**; solid without | ❌ without `s` (with `s`: untested) | ❌ without `s` (consistent) |
+| `5` | Gradient | ❌ dead even with `s` | ⚠️ lights, spatial-looking, "weird" | untested |
+| `6` | Shallow breath | solid without `s`; with `s` presumed like `4`, untested | ❌ without `s` | untested |
+| `7`–`9` | (not enumerated) | nothing noteworthy | — | — |
+
+Snake and gradient appear to be **strip effects**: they render on the
+multi-LED ambient ring and `keys` zone but never on a single Agent Key,
+which is geometrically sensible. `m` alone changed nothing in any test.
+Speed semantics of `s` (which value maps to which rate) are unmeasured.
+Sweeps run through a live daemon — `python tools/probe.py effects|speeds|
+ring|keys` — so any pad owner can extend this table.
 
 ### 5.3 `v.oai.rgbcfg` — zone lighting
 
@@ -331,10 +338,16 @@ indicator sends an `{"c": …}` frame followed by `{"e": 1, "b": 1}` (mirroring 
 split) and the ring lights; `{"e": 0, "b": 0}` clears it. Scope of that confirmation:
 one zone, the fields `c`/`e`/`b`, effect `1`, and a single colour — the default mic red,
 `0xFF0000`. Red rendering red does at least rule out a byte swap on this zone (a BGR
-reading would have shown blue), but arbitrary colours were not stepped through. The
-frames are sent fire-and-forget, so the method's reply and error behaviour are unknown;
-the confirmation is visual. The `keys` zone, the `s` and `m` fields, and effects beyond
-solid have not been exercised at all.
+reading would have shown blue). The frames are sent fire-and-forget, so the method's
+reply and error behaviour are unknown; the confirmation is visual.
+
+**The `keys` zone is confirmed on hardware** (first known third-party use): it accepts
+the same split partial updates with `c`/`e`/`b`/`s` — solid colours at chosen
+brightness light it, snake runs on it with `s`, and breath without `s` stays dark,
+exactly matching the per-key `s` rule (§5.2). Ambient-ring effect behaviour is also
+mapped in §5.2's zone table. Which physical LEDs the `keys` zone addresses (Command
+Keys, all keycaps, or the full backlight) is recorded from a single session and needs
+a finer description; the `m` field did nothing in any zone.
 
 ### 5.4 Other methods
 
@@ -384,9 +397,12 @@ across devices or hosts.
 | Colour is `0xRRGGBB` | Verified |
 | Effect `1` = solid | Verified |
 | `sys.version` | Verified |
-| Effect `0` (off) | Verified on the Agent Key zone |
-| Effects `2`, `4`, `5`, `6` (every animated effect) | **Contradicted** — none animate per-key on fw v0.4.1; `4`/`6` render solid |
-| Effect `3` (rainbow) | **Contradicted** — solid red per-key, ignores `c`; reproduced twice |
+| Effect `0` (off) | Verified on all three zones |
+| `s` = the animation enable/speed field | **Verified** — breath and rainbow animate per-key only with `s`; ring snake likewise |
+| Effects `4` (breath), `3` (rainbow) per-key | Verified WITH `s`; render solid / solid-red without |
+| Effects `2` (snake), `5` (gradient) per-key | Contradicted — dead even with `s`; they run on the ring (strip effects) |
+| `keys` zone accepts `c`/`e`/`b`/`s`, split partial updates | **Verified — first known third-party drive of this zone** |
+| `m` field | No observed behaviour in any test |
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
 | `AG00`–`AG05` physical positions | Verified (stated-order pass, `captures/`) |
 | `v.oai.rgbcfg` `ambient`: split partial updates, `c`/`e`/`b`, effect `1` | Verified — mic ring lights and clears; visual only, replies not read |

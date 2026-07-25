@@ -40,10 +40,10 @@ DEFAULTS = {
         "blocked": {"color": "FF8000", "effect": 6, "brightness": 1.0},
         "done":    {"color": "00FF00", "effect": 1, "brightness": 1.0},
         "error":   {"color": "FF0000", "effect": 1, "brightness": 1.0},
-        # per-key colour comes from the daemon's hue spread; effect 3 (the
-        # firmware's own "rainbow") renders solid red on real keys, so the
-        # default is breath, which is confirmed on hardware
-        "rainbow": {"color": "FFFFFF", "effect": 4, "brightness": 1.0},
+        # the firmware's real rainbow: effect 3 cycles hues once the `s`
+        # speed field rides along (without s it renders solid red — the
+        # discovery that unlocked every animated effect)
+        "rainbow": {"color": "FFFFFF", "effect": 3, "brightness": 1.0},
         "off":     {"color": "000000", "effect": 0, "brightness": 0.0},
     },
     "commands": {},
@@ -127,13 +127,19 @@ def color_int(value):
 
 
 def states_as_tuples(cfg):
-    """Config state specs -> the daemon's (colour, effect, brightness) tuples."""
+    """Config state specs -> (colour, effect, brightness, speed) tuples.
+
+    speed is the hardware-discovered `s` field: without it no per-key effect
+    animates at all (breath renders solid, rainbow renders red). The daemon
+    sends it for every animated effect; 1.0 unless the state overrides.
+    """
     out = {}
     for name, spec in cfg["states"].items():
         try:
             out[name] = (color_int(spec.get("color", "FFFFFF")),
                          int(spec.get("effect", 1)),
-                         float(spec.get("brightness", 1.0)))
+                         float(spec.get("brightness", 1.0)),
+                         float(spec.get("speed", 1.0)))
         except Exception:
             continue
     return out

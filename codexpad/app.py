@@ -615,14 +615,15 @@ it needs you, green when it's done.</p>
 in <a href="https://github.com/shahcolate/codexpad/blob/main/PROTOCOL.md">PROTOCOL.md</a>.</footer>
 
 <script>
-// ids the firmware disagrees with on real keys: 2/5 do nothing, 3 = solid red
-const EFFECTS = {0:"off",1:"solid",2:"snake (n/a on keys)",3:"rainbow (fw bug: red)",4:"breath",5:"gradient (n/a on keys)",6:"shallow breath"};
+// hardware truth: effects animate only WITH the speed field (sent
+// automatically); snake and gradient stay dead per-key regardless
+const EFFECTS = {0:"off",1:"solid",2:"snake (dead on keys)",3:"rainbow",4:"breath",5:"gradient (dead on keys)",6:"shallow breath"};
 const PRESETS = {
-  Classic: {idle:["FFFFFF",1,.35], working:["0000FF",4,1], blocked:["FF8000",6,1], done:["00FF00",1,1], error:["FF0000",1,1], rainbow:["FFFFFF",4,1]},
-  Matrix:  {idle:["013220",1,.3],  working:["00FF41",4,1], blocked:["CCFF00",6,1], done:["00FF41",1,1], error:["FF2222",1,1], rainbow:["00FF41",4,1]},
-  Sunset:  {idle:["331133",1,.35], working:["FF4E88",4,1], blocked:["FFB300",6,1], done:["FF7A59",1,1], error:["D7263D",1,1], rainbow:["FF4E88",4,1]},
-  Ocean:   {idle:["0A2A3A",1,.35], working:["00B4D8",4,1], blocked:["FFD166",6,1], done:["06D6A0",1,1], error:["EF476F",1,1], rainbow:["00B4D8",4,1]},
-  Mono:    {idle:["222222",1,.3],  working:["AAAAAA",4,1], blocked:["FFFFFF",6,1], done:["FFFFFF",1,.6], error:["FFFFFF",6,1], rainbow:["FFFFFF",4,1]},
+  Classic: {idle:["FFFFFF",1,.35], working:["0000FF",4,1], blocked:["FF8000",6,1], done:["00FF00",1,1], error:["FF0000",1,1], rainbow:["FFFFFF",3,1]},
+  Matrix:  {idle:["013220",1,.3],  working:["00FF41",4,1], blocked:["CCFF00",6,1], done:["00FF41",1,1], error:["FF2222",1,1], rainbow:["00FF41",3,1]},
+  Sunset:  {idle:["331133",1,.35], working:["FF4E88",4,1], blocked:["FFB300",6,1], done:["FF7A59",1,1], error:["D7263D",1,1], rainbow:["FF4E88",3,1]},
+  Ocean:   {idle:["0A2A3A",1,.35], working:["00B4D8",4,1], blocked:["FFD166",6,1], done:["06D6A0",1,1], error:["EF476F",1,1], rainbow:["00B4D8",3,1]},
+  Mono:    {idle:["222222",1,.3],  working:["AAAAAA",4,1], blocked:["FFFFFF",6,1], done:["FFFFFF",1,.6], error:["FFFFFF",6,1], rainbow:["FFFFFF",3,1]},
 };
 let cfg = null, selSlot = 0;
 const $ = (q) => document.querySelector(q);
@@ -664,7 +665,9 @@ function legend() {
       style="background:#${tableSpec(n).color}"></span>${n}</span>`).join("");
 }
 async function tryRow(name, tr) {
-  const r = await api("/api/preview", {slot: selSlot, ...specOf(tr)});
+  const spec = specOf(tr);
+  const speed = (cfg.states[name] && cfg.states[name].speed) || 1;
+  const r = await api("/api/preview", {slot: selSlot, s: speed, ...spec});
   say(r.error || `AG0${selSlot} → ${name}`);
   legend();
 }
@@ -702,7 +705,11 @@ async function demo() {
 }
 async function save() {
   const states = {};
-  $$("#states tr[data-name]").forEach(tr => { states[tr.dataset.name] = specOf(tr); });
+  $$("#states tr[data-name]").forEach(tr => {
+    states[tr.dataset.name] = specOf(tr);
+    const old = cfg.states[tr.dataset.name];
+    if (old && old.speed !== undefined) states[tr.dataset.name].speed = old.speed;
+  });
   let commands;
   try { commands = JSON.parse($("#commands").value || "{}"); }
   catch (e) { return say("commands isn't valid JSON: " + e.message); }

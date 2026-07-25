@@ -148,11 +148,13 @@ one-word shell function.
   **Install hooks** (merges into `~/.claude/settings.json`, backup first)
   and a **Start daemon** that uses the passwordless root wrapper when
   installed.
-- 🌈 **Rainbow** — six hues spread across the six keys until you press the
-  dial. Built in software from hardware-confirmed effects: the firmware's
-  *own* rainbow effect id renders solid red on real Agent Keys, and snake
-  and gradient do nothing there either (PROTOCOL.md §5.2 has the observed
-  truth table; `python tools/probe.py effects` reproduces it).
+- 🌈 **Rainbow** — the firmware's *real* rainbow, cycling hues on all six
+  keys until you press the dial. Unlocked by a hardware session that found
+  the undocumented `s` field is the animation switch: without it rainbow
+  renders solid red and breath renders solid — with it they run. codexpad
+  now sends `s` for every animated effect (PROTOCOL.md §5.2 has the full
+  zone-by-zone truth table; `python tools/probe.py effects|speeds|ring|keys`
+  reproduces it).
 
 ## The hardware, mapped
 
@@ -285,10 +287,12 @@ Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
 }
 ```
 
-Effects: `0` off, `1` solid, `4` breath, `6` shallow breath — all confirmed
-on hardware. `2` snake and `5` gradient do nothing on real Agent Keys, and
-`3` rainbow renders solid red (PROTOCOL.md §5.2). Colours are `RRGGBB` —
-verified, no byte swap. The daemon's socket takes commands directly:
+Effects: `0` off, `1` solid, `2` snake, `3` rainbow, `4` breath, `5`
+gradient, `6` shallow breath — animated ones need the `s` speed field,
+which codexpad sends automatically (per-state override: a `"speed"` key).
+Snake and gradient are strip effects: they run on the ring/keys zones, not
+on a single Agent Key (PROTOCOL.md §5.2). Colours are `RRGGBB` — verified,
+no byte swap. The daemon's socket takes commands directly:
 `rainbow`, `off`, `ring`, `reload`, `pause`, `resume`, `status`, `trim`,
 `wait_event` (long-poll for pad events), e.g.
 `printf '{"cmd":"status"}' | nc -U /tmp/codexpad.sock`.
@@ -357,7 +361,8 @@ are the pad being on the wrong bus:
 | `permission denied: /tmp/codexpad.daemon.log` | Root-owned log from earlier sudo runs breaks user redirects | `sudo rm -f` it; current wrappers log as root by design |
 | One key lights by itself; panel says daemon unreachable | A **stale daemon build** misreads panel commands as hook messages | Restart the daemon from the up-to-date repo; the panel names mixed builds |
 | Keys stay lit after tests | The device keeps its last lighting | Any daemon start blanks; `--off`; press green/red keys |
-| "Rainbow" turned everything red; snake/gradient do nothing | Firmware truth ≠ vendor effect list on Agent Keys | Use solid/breath/shallow-breath; Rainbow now spreads real hues in software |
+| "Rainbow" turned everything red / breath didn't breathe | The undocumented `s` field is the animation switch and it was missing | Update — codexpad sends `s` automatically now; effects genuinely animate |
+| Snake or gradient on an Agent Key does nothing | They're strip effects — ring and `keys` zones only | Use solid/breath/rainbow per-key; snake lives on the ring |
 | ChatGPT stopped driving the pad since codexpad arrived | The daemon held the device / stomped the vendor lights | Update — auto-handoff releases the pad while ChatGPT runs. For BLE instead: tap the touch key to a blue-ring channel and re-pair |
 | Hooks don't fire | Claude Code reads settings at launch | Fully quit and reopen; Desktop: **Code** tab + **Local** environment |
 | Need to stop everything | The app supervises and revives things by design | `sudo codexpad-stop` (daemon only) or `./make_login_app.sh remove` (stops, then uninstalls) |
