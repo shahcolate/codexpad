@@ -364,6 +364,16 @@ is documented-but-untested or inferred, and the untested list is not short.
 
 ## Field guide
 
+**Start here when anything doesn't light:**
+
+```bash
+python -m codexpad.check
+```
+
+It walks the whole chain — daemon → build version → pad → handoff state →
+hooks — fires a real test light at the pad, and prints **the one fix** for
+the first broken link. No guessing, no archaeology.
+
 Every symptom and fix below was hit and cleared on real hardware; the middle
 column is our best explanation of *why*, which is interpretation rather than
 something we instrumented. Start with the transport — most "broken" states
