@@ -9,7 +9,7 @@ description = "Drive OpenAI's Codex Micro macropad from Claude Code"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Shah Alam Baig" }]
+authors = [{ name = "shahcolate" }]
 dependencies = ["hidapi"]
 keywords = ["codex-micro", "macropad", "claude-code", "hid", "work-louder"]
 classifiers = [

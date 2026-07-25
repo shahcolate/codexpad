@@ -390,7 +390,7 @@ codexpad() { sudo -n /usr/local/bin/codexpad-daemon & (cd ~/codexpad && python -
 EOF
 ```
 
-(Adjust `~/codex-micro-for-claude` if your clone lives elsewhere. If
+(Adjust `~/codexpad` if your clone lives elsewhere. If
 Codexpad.app is installed, prefer opening the app — the function and the
 app's supervisor would otherwise both spawn daemons.)
 
