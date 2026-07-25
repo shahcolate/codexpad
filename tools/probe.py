@@ -15,13 +15,15 @@ protocol against your own device before trusting anything in that document.
     python tools/probe.py ring                  effect sweep on the ambient ring
     python tools/probe.py keys                  first probe of the unexplored
                                                 'keys' zone - watch the pad!
+    python tools/probe.py ledmap                guided LED mapping: id sweep
+                                                0-15 + slow snakes per zone
     python tools/probe.py restore               RESCUE: relight every zone
 
-The four sweeps go through the RUNNING DAEMON's socket - the daemon keeps
+The sweeps go through the RUNNING DAEMON's socket - the daemon keeps
 the device, no sudo needed. Everything else opens the device directly, which
 on macOS may need Input Monitoring, or sudo.
 
-!! The zone sweeps (ring, keys) write v.oai.rgbcfg, which is device
+!! The zone sweeps (ring, keys, ledmap) write v.oai.rgbcfg, which is device
 !! CONFIGURATION and STAYS WRITTEN - across processes, across a reboot, and
 !! across a switch back to the vendor client. A zone left dark is dark for
 !! everyone, and no vendor UI puts it back. Every sweep here therefore ends
@@ -185,13 +187,15 @@ def _need_daemon():
 
 
 def cmd_speeds(slot="0"):
-    """Do the dead effects (2 snake / 3 rainbow / 5 gradient) come alive with
-    the undocumented s (speed?) or m fields? 4s per combo, watch the key."""
+    """Do the dead effects come alive with the undocumented s (speed?) or m
+    fields? Field report says even breath renders solid per-key, so every
+    non-solid effect is on trial. 4s per combo, watch the key."""
     slot = int(slot)
     pong = _need_daemon()
     print(f"daemon {pong.get('v', '?')} - testing s/m on the dead effects, AG0{slot}.")
     print("Watch the key. Note ANY difference from a plain solid/red/nothing.\n")
-    for eff, name in ((2, "snake"), (3, "rainbow"), (5, "gradient")):
+    for eff, name in ((4, "breath"), (2, "snake"), (3, "rainbow"),
+                      (5, "gradient")):
         for extra in ({"s": 1}, {"s": 5}, {"s": 0.2}, {"m": 1}, {"s": 3, "m": 2}):
             r = ask_daemon({"cmd": "preview", "slot": slot, "effect": eff,
                             "brightness": 1.0, "color": "00A0FF", **extra})
@@ -271,6 +275,47 @@ def cmd_restore(*_args):
     rescue()
 
 
+def cmd_ledmap(_=None):
+    """Map the pad's LEDs the way the inputs were mapped: one at a time.
+
+    Phase A: does thstatus accept ids beyond the six Agent Keys? Each id
+    0-15 lights green for 3s - note which PHYSICAL light answers.
+    Phase B/C: a slow snake on the keys zone / ambient ring visits every
+    LED in chain order - watch the crawl and the map draws itself.
+    """
+    pong = _need_daemon()
+    print(f"daemon {pong.get('v', '?')} - LED mapping session, three phases.\n")
+    print("PHASE A  thstatus id sweep 0-15, GREEN, 3s each. ids 0-5 should be")
+    print("the six Agent Keys; anything lighting beyond id 5 is a discovery.")
+    input("Enter to start...")
+    for i in range(16):
+        ask_daemon({"cmd": "preview", "slot": i, "color": "00FF00",
+                    "effect": 1, "brightness": 1.0})
+        print(f"  id {i:2d}  <- which light came on (if any)?")
+        time.sleep(3)
+        ask_daemon({"cmd": "preview", "slot": i, "color": "000000",
+                    "effect": 0, "brightness": 0})
+    print("\nPHASE B  slow snake on the KEYS zone, ~15s. Watch which LEDs it")
+    print("visits and in what order - that order is the LED chain.")
+    input("Enter to start...")
+    ask_daemon({"cmd": "zone", "zone": "keys",
+                "fields": {"c": "00A0FF", "e": 2, "b": 1, "s": 0.3}})
+    time.sleep(15)
+    print("\nPHASE C  slow snake on the AMBIENT ring, ~12s. Count the segments.")
+    input("Enter to start...")
+    ask_daemon({"cmd": "zone", "zone": "ambient",
+                "fields": {"c": "00A0FF", "e": 2, "b": 1, "s": 0.3}})
+    time.sleep(12)
+    # restore, NOT {"e": 0, "b": 0}. This sweep ended by writing both zones
+    # dark, and rgbcfg is persistent config: that left the pad unlit for
+    # every host, the vendor client included, with the ambient ring's
+    # BLE/wired mode tell gone too. It reads as a bricked pad.
+    ask_daemon({"cmd": "restore"})
+    print("\ndone - zones restored to your configured baseline. Report: phase "
+          "A id -> light table,\nphase B crawl order, phase C segment count. "
+          "That's the whole LED map.")
+
+
 def cmd_effects(slot="0"):
     slot = int(slot)
     pong = _need_daemon()
@@ -315,6 +360,8 @@ def main():
         cmd_ringfx(*rest)
     elif cmd == "keys":
         cmd_keyszone(*rest)
+    elif cmd == "ledmap":
+        cmd_ledmap(*rest)
     elif cmd == "restore":
         cmd_restore(*rest)
     else:

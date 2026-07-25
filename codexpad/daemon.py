@@ -362,13 +362,19 @@ def set_slot(handle, slot, state):
     every piece actually goes out, which is what _send_fields guarantees and
     the old fixed two-frame split did not.
     """
-    color, effect, brightness = STATES[state]
+    color, effect, brightness, speed = STATES[state]
     if state == "rainbow":
         color = RAINBOW_HUES[slot % len(RAINBOW_HUES)]
     with _lock:
         _slot_state[slot] = state
-        thread_write(handle, slot, {"c": color, "e": effect,
-                                    "b": brightness * _trim[0]})
+        fields = {"c": color, "e": effect, "b": brightness * _trim[0]}
+        if speed and effect not in (0, 1):
+            # the animation switch, hardware-discovered: without `s` breath
+            # renders solid and rainbow renders red (PROTOCOL.md §5.2). It
+            # needs no frame of its own -- thread_write measures and packs,
+            # so `s` rides with whatever else fits.
+            fields["s"] = speed
+        thread_write(handle, slot, fields)
 
 
 # --- slot allocation -------------------------------------------------------
@@ -576,7 +582,7 @@ def pulse(handle, slot):
         state = _slot_state.get(slot)
         if state != "working":
             return
-        _, _, brightness = STATES[state]
+        _, _, brightness, _ = STATES[state]
         thread_write(handle, slot,
                      {"b": max(0.15, brightness * _trim[0] * 0.3)})
 

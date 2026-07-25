@@ -33,15 +33,19 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "pad_set",
      "description": "Paint one Agent Key directly (slot 0-5). Effects: 0 off, "
-                    "1 solid, 4 breath, 6 shallow breath (2/3/5 are broken in "
-                    "the pad firmware).",
+                    "1 solid, 3 rainbow (hue cycle), 4 breath, 6 shallow "
+                    "breath. Snake (2) and gradient (5) are strip effects "
+                    "that only run on the ring, not per-key.",
      "inputSchema": {"type": "object", "required": ["slot", "color"],
                      "properties": {
                          "slot": {"type": "integer", "minimum": 0, "maximum": 5},
                          "color": {"type": "string",
                                    "description": "RRGGBB hex, e.g. 00FF00"},
                          "effect": {"type": "integer", "default": 1},
-                         "brightness": {"type": "number", "default": 1.0}}}},
+                         "brightness": {"type": "number", "default": 1.0},
+                         "speed": {"type": "number", "default": 1.0,
+                                   "description": "animation speed; higher = "
+                                                  "faster"}}}},
     {"name": "pad_session",
      "description": "Set a named session's state the way Claude Code hooks "
                     "do; the pad allocates/reuses a key for the name. States: "
@@ -65,8 +69,8 @@ TOOLS = [
                                    "description": "RRGGBB hex; default is the "
                                                   "configured mic colour"}}}},
     {"name": "pad_rainbow",
-     "description": "Six hues across the six keys until someone presses the "
-                    "dial.",
+     "description": "The firmware's real rainbow: all six keys cycle hues "
+                    "until someone presses the dial.",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "pad_off",
      "description": "Blank every Agent Key.",
@@ -102,7 +106,8 @@ def call_tool(name, args):
         return ask_daemon({"cmd": "preview", "slot": int(args["slot"]),
                            "color": str(args["color"]),
                            "effect": int(args.get("effect", 1)),
-                           "brightness": float(args.get("brightness", 1.0))})
+                           "brightness": float(args.get("brightness", 1.0)),
+                           "s": float(args.get("speed", 1.0))})
     if name == "pad_session":
         # hook-shaped messages get no reply by design
         return ask_daemon({"state": args["state"],

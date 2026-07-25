@@ -297,31 +297,48 @@ confirming no byte swap.
 
 ### 5.2 Lighting effects
 
-| Value | Effect (per the vendor client's enumeration) | On hardware (Agent Key zone, fw v0.4.1) |
-|---|---|---|
-| `0` | Off | ✅ confirmed |
-| `1` | Solid | ✅ confirmed |
-| `2` | Snake — a lit segment travels the strip | ❌ no visible effect |
-| `3` | Rainbow — cycles the hue spectrum | ⚠️ renders **solid red**, ignoring `c` |
-| `4` | Breath — fades in and out | ✅ confirmed |
-| `5` | Gradient | ❌ no visible effect |
-| `6` | Shallow breath — as breath, but floors at half brightness | ✅ confirmed |
+**The `s` field is the animation switch.** A three-sweep hardware session
+(ids 0–9 with `c`/`e`/`b` only, then the same effects with `s`/`m`, on all
+three zones) established the rule this document previously missed: **without
+`s`, no effect animates anywhere** — breath renders as plain solid and
+rainbow renders as solid red. With `s` riding along (any tested value:
+0.2–5), the animated effects run. The vendor client evidently always sends
+`s`; every earlier "broken effect" observation was a missing parameter.
 
-The vendor enumeration and the Agent Key hardware **disagree**: on a real pad,
-`2` and `5` do nothing and `3` renders solid red regardless of the requested
-colour (observed via `v.oai.thstatus` per-key updates carrying only `c`/`e`/`b`).
-Plausible explanations, none yet proven: these effects may require the `s`
-(speed) or `m` fields to animate; they may only be implemented for `rgbcfg`
-zones rather than per-key thread status; or the id table may simply differ per
-zone. `python tools/probe.py effects [slot]` sweeps ids 0–9 through a running
-daemon so any pad owner can extend this table.
+Effect ids vs zones, fw v0.4.1, all observed on hardware:
+
+| Value | Effect | Per-key (`thstatus`), with `s` | `ambient` ring | `keys` zone |
+|---|---|---|---|---|
+| `0` | Off | ✅ | ✅ | ✅ (clears) |
+| `1` | Solid | ✅ (no `s` needed) | ✅ (no `s` needed) | ✅ (no `s` needed) |
+| `2` | Snake | ❌ dead even with `s` | ✅ **with `s`** (without: lit, malformed) | ✅ with `s` |
+| `3` | Rainbow | ✅ cycles hues **with `s`**; solid red without | ✅ | untested |
+| `4` | Breath | ✅ breathes **with `s`**; solid without | ❌ without `s` (with `s`: untested) | ❌ without `s` (consistent) |
+| `5` | Gradient | ❌ dead even with `s` | ⚠️ lights, spatial-looking, "weird" | untested |
+| `6` | Shallow breath | solid without `s`; with `s` presumed like `4`, untested | ❌ without `s` | untested |
+| `7`–`9` | (not enumerated) | nothing noteworthy | — | — |
+
+Snake and gradient appear to be **strip effects**: they render on the
+multi-LED ambient ring and `keys` zone but never on a single Agent Key,
+which is geometrically sensible. `m` alone changed nothing in any test.
+Higher `s` is visibly faster (confirmed by eye across 0.2–5); the exact
+value-to-rate mapping is unmeasured.
+Sweeps run through a live daemon — `python tools/probe.py effects|speeds|
+ring|keys` — so any pad owner can extend this table.
 
 ### 5.3 `v.oai.rgbcfg` — zone lighting
 
-Configures lighting zones. The zone names `ambient` (outer ring) and `keys` (under-keycap
-backlight) and the per-zone fields `e` (effect), `b` (brightness), `s` (speed), `c`
-(colour) and `m` (an additional parameter of undetermined meaning) are taken from the
-vendor client's schema, not from probing the device; only the subset below was exercised.
+Configures lighting zones. The zone names `ambient` (outer ring) and `keys` and the
+per-zone fields `e` (effect), `b` (brightness), `s` (speed), `c` (colour) and `m` (an
+additional parameter of undetermined meaning) come from the vendor client's schema;
+both zones and all of `c`/`e`/`b`/`s` have since been driven on hardware. `keys` turns
+out to be more than an under-keycap backlight — it is one LED strip spanning the vendor
+Command Keys *and* the mic bar (see the mapping session below), which is most of the
+pad's visible lighting outside the six Agent Keys.
+
+Between them the two zones are nearly everything on the pad that lights up and is not
+an Agent Key. That is what makes the persistence warning below the most consequential
+paragraph in this document.
 
 Given the 61-byte body limit, a two-zone update cannot fit in a single frame.
 **Single-zone partial updates to `ambient` are confirmed on hardware**: codexpad's mic
@@ -329,10 +346,24 @@ indicator sends an `{"c": …}` frame followed by `{"e": 1, "b": 1}` (mirroring 
 split) and the ring lights; `{"e": 0, "b": 0}` clears it. Scope of that confirmation:
 one zone, the fields `c`/`e`/`b`, effect `1`, and a single colour — the default mic red,
 `0xFF0000`. Red rendering red does at least rule out a byte swap on this zone (a BGR
-reading would have shown blue), but arbitrary colours were not stepped through. The
-frames are sent fire-and-forget, so the method's reply and error behaviour are unknown;
-the confirmation is visual. The `keys` zone, the `s` and `m` fields, and effects beyond
-solid have not been exercised at all.
+reading would have shown blue). The frames are sent fire-and-forget, so the method's
+reply and error behaviour are unknown; the confirmation is visual.
+
+**The `keys` zone is confirmed on hardware** (first known third-party use): it accepts
+the same split partial updates with `c`/`e`/`b`/`s` — solid colours at chosen
+brightness light it, snake runs on it with `s`, and breath without `s` stays dark,
+exactly matching the per-key `s` rule (§5.2). Ambient-ring effect behaviour is also
+mapped in §5.2's zone table. The `m` field did nothing in any zone.
+
+**LED addressing limits, from a stated-order mapping session:** `v.oai.thstatus`
+accepts exactly ids `0`–`5` (the six Agent Keys) — a full sweep of ids `0`–`15`,
+solid green, lit nothing beyond them, so the remaining LEDs are *not* reachable as
+thread ids. The `keys` zone is addressable only as a whole through `rgbcfg`. A slow
+snake (`e:2, s:0.3`) across it showed: the chain **enters at the ⑂ (fork/new-chat)
+key**, proceeds to the adjacent key, and the **mic bar's LEDs light on the same
+chain** almost immediately — so the zone spans the vendor keys *and* the mic bar as
+one strip. The snake's segment is several LEDs wide, which blurs neighbours; a
+per-LED chain order would need a narrower segment (unknown field) or firmware help.
 
 #### ⚠️ `rgbcfg` is configuration, and it stays written
 
@@ -415,9 +446,12 @@ across devices or hosts.
 | Colour is `0xRRGGBB` | Verified |
 | Effect `1` = solid | Verified |
 | `sys.version` | Verified |
-| Effects `0`, `4`, `6` (off, breath, shallow breath) | Verified on the Agent Key zone |
-| Effects `2`, `5` (snake, gradient) | **Contradicted** — no visible effect per-key on fw v0.4.1 |
-| Effect `3` (rainbow) | **Contradicted** — renders solid red per-key, ignores `c` |
+| Effect `0` (off) | Verified on all three zones |
+| `s` = the animation enable/speed field | **Verified** — breath and rainbow animate per-key only with `s`; ring snake likewise |
+| Effects `4` (breath), `3` (rainbow) per-key | Verified WITH `s`; render solid / solid-red without |
+| Effects `2` (snake), `5` (gradient) per-key | Contradicted — dead even with `s`; they run on the ring (strip effects) |
+| `keys` zone accepts `c`/`e`/`b`/`s`, split partial updates | **Verified — first known third-party drive of this zone** |
+| `m` field | No observed behaviour in any test |
 | `b`, `s`, `sk`, `sa` field behaviour | Documented, not individually tested |
 | `AG00`–`AG05` physical positions | Verified (stated-order pass, `captures/`) |
 | `v.oai.rgbcfg` `ambient`: split partial updates, `c`/`e`/`b`, effect `1` | Verified — mic ring lights and clears; visual only, replies not read |

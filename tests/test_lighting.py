@@ -167,7 +167,8 @@ class FrameLimits(unittest.TestCase):
         """
         for trim in (1.0, 0.9, 0.7, 0.3, 0.35):
             for seq in range(1, 91):
-                for state in daemon.STATES:
+                for state, spec in daemon.STATES.items():
+                    _, effect, _, speed = spec
                     pad = FakePad()
                     daemon._trim[0] = trim
                     daemon._seq[0] = seq - 1
@@ -175,11 +176,34 @@ class FrameLimits(unittest.TestCase):
                     sent = {}
                     for frame in pad.frames:
                         sent.update(frame["p"][0])
+                    # `s` is the animation switch and only rides along for
+                    # effects that animate (PROTOCOL.md §5.2)
+                    want = {"c", "e", "b"}
+                    if speed and effect not in (0, 1):
+                        want.add("s")
                     self.assertEqual(
-                        set(sent) - {"id"}, {"c", "e", "b"},
+                        set(sent) - {"id"}, want,
                         f"state={state} trim={trim} id={seq}: the device only "
                         f"received {sorted(set(sent) - {'id'})}")
         daemon._trim[0] = 1.0
+
+    def test_the_animation_switch_reaches_the_device(self):
+        """Breath renders solid and rainbow renders red without `s`, so a
+        dropped `s` frame is a silently broken effect, not a cosmetic one."""
+        daemon._seq[0] = 89
+        daemon.set_slot(self.pad, 0, "working")     # breath, effect 4
+        sent = {}
+        for frame in self.pad.frames:
+            sent.update(frame["p"][0])
+        self.assertIn("s", sent)
+        self.assertEqual(sent["e"], 4)
+
+    def test_solid_states_send_no_speed(self):
+        daemon.set_slot(self.pad, 0, "done")        # solid, effect 1
+        sent = {}
+        for frame in self.pad.frames:
+            sent.update(frame["p"][0])
+        self.assertNotIn("s", sent)
 
     def test_integral_numbers_are_encoded_short(self):
         self.assertEqual(daemon._num(1.0), 1)
