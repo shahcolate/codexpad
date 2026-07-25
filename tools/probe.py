@@ -177,13 +177,15 @@ def _need_daemon():
 
 
 def cmd_speeds(slot="0"):
-    """Do the dead effects (2 snake / 3 rainbow / 5 gradient) come alive with
-    the undocumented s (speed?) or m fields? 4s per combo, watch the key."""
+    """Do the dead effects come alive with the undocumented s (speed?) or m
+    fields? Field report says even breath renders solid per-key, so every
+    non-solid effect is on trial. 4s per combo, watch the key."""
     slot = int(slot)
     pong = _need_daemon()
     print(f"daemon {pong.get('v', '?')} - testing s/m on the dead effects, AG0{slot}.")
     print("Watch the key. Note ANY difference from a plain solid/red/nothing.\n")
-    for eff, name in ((2, "snake"), (3, "rainbow"), (5, "gradient")):
+    for eff, name in ((4, "breath"), (2, "snake"), (3, "rainbow"),
+                      (5, "gradient")):
         for extra in ({"s": 1}, {"s": 5}, {"s": 0.2}, {"m": 1}, {"s": 3, "m": 2}):
             r = ask_daemon({"cmd": "preview", "slot": slot, "effect": eff,
                             "brightness": 1.0, "color": "00A0FF", **extra})
