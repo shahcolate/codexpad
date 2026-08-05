@@ -48,6 +48,10 @@ your own pad instead of trusting it.
 | Turn fails on an API error | red |
 | Session ends | off |
 
+Running a fleet in [**Orca**](https://www.onorca.dev)? Every worktree lights
+the same way — Codex, Gemini, Cursor and the rest included — and its key
+presses act inside Orca. [Jump to that section](#orca--the-whole-fleet-on-six-keys).
+
 Each session is identified by its working directory — Desktop gives every
 session an isolated worktree, so the mapping needs no bookkeeping. A seventh
 session evicts the least recently used key. Pressing a green or red key
@@ -74,7 +78,7 @@ codexpad does with Claude:
 | 6 Agent Keys | thread status lights | session status lights **+ press to ack / jump to the window** |
 | Dial | brightness | brightness trim **+ press = acknowledge everything** |
 | Mic bar | native voice input | hold / double-press-latch, ring indicator, dictation into the prompt |
-| ✓ / ✗ | approve / decline | approve / decline the focused prompt (opt-in) |
+| ✓ / ✗ | approve / decline | approve / decline the focused prompt (opt-in) — or, under [Orca](#orca--the-whole-fleet-on-six-keys), the asking agent's own pane |
 | ⑂ new chat | new Codex chat | opens Claude (default binding, rebindable) |
 | ✦ Codex key | opens Codex | **hands the pad to Codex** — the two stacks share one device |
 | ⚡ fast mode | Codex fast mode | bindable (no safe automatic analog — `/fast` would need keystroke injection; recipe welcome) |
@@ -259,6 +263,63 @@ turns it off), state survives the round-trip, and a manual **⇆ Hand pad to
 Codex / ⇤ Take pad back** is still there for when you want to force it.
 True *simultaneous* use needs the vendor's layer system — roadmap.
 
+## Orca — the whole fleet on six keys
+
+[Orca](https://www.onorca.dev) is an agent development environment: it runs a
+fleet of coding agents — Claude Code, Codex, Gemini, Cursor, Copilot, Amp,
+Droid and a dozen more CLIs — each in its own git worktree, and it collects
+every one of their statuses through hooks it installs itself.
+
+That lines up with codexpad exactly, because both name a session the same
+way: **by its working directory**. An Orca worktree *is* a working
+directory, so it claims the key that directory already owns — no second
+mapping, no double-claimed key when a Claude session runs inside Orca. Turn
+Orca on and the pad stops being a Claude-only board:
+
+| In Orca | On the pad |
+|---|---|
+| a worktree with an agent working | blue, breathing — **and a shimmer per tool call**, for every agent, not just Claude |
+| an agent asking for permission | **amber, breathing** — the one glance that matters, now from Codex or Gemini too |
+| a turn finished | green |
+| a worktree with no agent / asleep | nothing: with six keys and twenty worktrees, only agents earn one |
+
+And back the other way — this is where the Orca link beats the generic path:
+
+| You press | What happens |
+|---|---|
+| a **working or amber** key | that worktree is **activated inside Orca** over its runtime socket, its agent's pane raised, and the Orca window brought forward |
+| **✓** / **✗** | Enter / Escape goes **into that agent's own pane** — not keystrokes aimed at whatever window is focused, so no Accessibility grant is involved in this path |
+| **Stick** E/W | cycles through Orca worktrees and Claude sessions alike |
+
+It's on by default and costs nothing when you don't run Orca: the bridge
+only wakes when Orca's runtime file appears (`orca: false` in
+`~/.codexpad.json`, or the checkbox in the panel, turns it off). Quit Orca
+and the keys it claimed go dark — an amber for an agent that no longer
+exists is worse than a dark key. Check the link at any time:
+
+```bash
+python -m codexpad.orca      # what the bridge sees right now
+```
+
+```
+metadata  ~/Library/Application Support/orca/orca-runtime.json
+runtime   reachable — 7 worktrees, 4 live agents
+keys      what the pad would show:
+          working  working      api-retry     ~/orca/acme/api-retry
+          blocked  permission   flaky-test    ~/orca/acme/flaky-test
+          done     active       docs-pass     ~/orca/acme/docs-pass
+```
+
+How it talks to Orca: the running app writes `orca-runtime.json` into its
+userData directory with a unix socket path and an auth token, and speaks one
+JSON object per line over it — the same transport Orca's own CLI uses.
+codexpad polls `worktree.ps` with Orca's snapshot cursor (an unchanged fleet
+answers *unchanged*, not a catalogue) and calls `worktree.activate`,
+`terminal.resolvePane` and `terminal.send` when a key is pressed. Stdlib
+only, ~200 lines, in [`codexpad/orca.py`](codexpad/orca.py). Unaffiliated
+with Orca; read against Orca 1.4.x, and if a future version renames a method
+the bridge goes quiet and the pad stays on Claude Code hooks.
+
 ## MCP — let anything drive the pad
 
 codexpad ships an MCP server (stdlib-only, like everything here):
@@ -305,7 +366,9 @@ Everything lives in `~/.codexpad.json` (defaults: `codexpad/config.py`):
   "auto_handoff": true,
   "focus_command": "",
   "approve_from_pad": false,
-  "nag_minutes": 10
+  "nag_minutes": 10,
+  "orca": true,
+  "orca_poll_s": 1.5
 }
 ```
 
@@ -323,8 +386,9 @@ no byte swap. The daemon's socket takes commands directly:
 
 ```
 Claude Code hook ──stdin JSON──▶ notify.py ──unix socket──▶ daemon.py ◀──vendor HID──▶ Codex Micro
-                                                                ▲
-                                              control panel ────┘  (reload · preview · pause · status)
+                                                                ▲ ▲
+                                              control panel ────┘ │  (reload · preview · pause · status)
+                        Orca runtime ◀──unix socket──▶ orca.py ────┘  (worktree.ps · activate · send)
 ```
 
 - **The daemon holds the HID handle** — opening per hook is slow and races.
@@ -336,6 +400,12 @@ Claude Code hook ──stdin JSON──▶ notify.py ──unix socket──▶ 
 - **`notify.py` never fails** — every error is swallowed, so a dead daemon
   can't break a Claude Code turn. `CODEXPAD_DEBUG=1` logs to
   `/tmp/codexpad.log`.
+- **The Orca bridge is edge-triggered** — it writes a key only when that
+  worktree's status *changes*, so it never fights the Claude Code hooks over
+  a session both can see; whichever saw the change last is the one that
+  paints. Its one deference: Orca's "no agent running" never overwrites a
+  green, because a finished turn you haven't acknowledged is the more useful
+  thing to say.
 - **The daemon never reassembles RPC replies** — notifications and replies
   share report ID `0x06` (PROTOCOL.md §2.2), but notifications parse
   standalone and reply fragments never do, so anything unparseable is
@@ -444,6 +514,7 @@ app's supervisor would otherwise both spawn daemons.)
 - [x] Tool-call shimmer (PreToolUse), amber nag escalation on the ring
 - [x] MCP server: `pad_*` tools for Claude Desktop, agents, scripts
 - [x] Remote-session relay (`/api/hook`), pip install from git, session stats
+- [x] Orca fleet bridge: every agent's status on the keys, presses acted on inside Orca
 - [ ] Simultaneous Codex + Claude via the vendor's layer system
 - [ ] Native menu-bar app (panel without the browser)
 - [x] Joystick session navigation (E/W focus cycling); `s` field discovered — effects fixed

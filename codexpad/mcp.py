@@ -23,8 +23,9 @@ PROTOCOL_VERSION = "2024-11-05"
 TOOLS = [
     {"name": "pad_status",
      "description": "Current pad state: device connection (with diagnosis), "
-                    "per-key sessions, mic, brightness, pause, and running "
-                    "session stats.",
+                    "per-key sessions, mic, brightness, pause, running "
+                    "session stats, and the Orca fleet link (worktrees "
+                    "followed, how many are waiting on you).",
      "inputSchema": {"type": "object", "properties": {}}},
     {"name": "pad_set",
      "description": "Paint one Agent Key directly (slot 0-5). Effects: 0 off, "
