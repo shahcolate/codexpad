@@ -68,8 +68,13 @@ def user_data_path():
     if os.name == "nt":
         appdata = os.environ.get("APPDATA")
         return os.path.join(appdata, "orca") if appdata else ""
-    return os.path.join(os.environ.get("XDG_CONFIG_HOME")
-                        or os.path.join(home, ".config"), "orca")
+    # XDG_CONFIG_HOME only when it belongs to the user we resolved a home for:
+    # a sudo'd daemon that inherited root's would otherwise look for Orca in
+    # root's config directory and conclude it isn't running.
+    sudoed = (getattr(os, "geteuid", lambda: -1)() == 0
+              and os.environ.get("SUDO_USER"))
+    xdg = os.environ.get("XDG_CONFIG_HOME") if not sudoed else None
+    return os.path.join(xdg or os.path.join(home, ".config"), "orca")
 
 
 def metadata_path():
