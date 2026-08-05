@@ -36,6 +36,7 @@ except ImportError:
 
 from . import __version__ as VERSION
 from . import config
+from . import orca as orca_client
 
 # --- device ----------------------------------------------------------------
 VID = 0x303A          # Espressif
@@ -96,11 +97,15 @@ def load_config():
     MIC_COLOR[0] = config.color_int(cfg["mic_color"])
     APPROVE_FROM_PAD[0] = bool(cfg.get("approve_from_pad"))
     NAG_MINUTES[0] = cfg.get("nag_minutes", 10)
+    ORCA_ENABLED[0] = bool(cfg.get("orca", True))
+    ORCA_POLL[0] = float(cfg.get("orca_poll_s", 1.5))
     return cfg
 
 
 APPROVE_FROM_PAD = [False]    # checkmark/cross answer the focused prompt
 NAG_MINUTES = [10]            # ring lights after this long blocked; 0 = off
+ORCA_ENABLED = [True]         # follow an Orca fleet when the app is running
+ORCA_POLL = [1.5]             # seconds between "what changed?" calls
 
 
 load_config()
@@ -326,8 +331,7 @@ def _cycle_focus(direction):
         return
     _focus_cycle[0] = (_focus_cycle[0] + direction) % len(owned)
     cwd, slot = owned[_focus_cycle[0]]
-    emit_event({"t": "FOCUS", "cwd": cwd,
-                "state": _slot_state.get(slot) or "idle"})
+    focus_session(cwd, _slot_state.get(slot) or "idle")
     print(f"  stick   focus -> slot {slot} {cwd}", flush=True)
 
 
@@ -431,6 +435,307 @@ def nagger(handle):
             pass
 
 
+# --- Orca fleet --------------------------------------------------------------
+# The pad follows an Orca (https://www.onorca.dev) fleet the same way it
+# follows Claude Code hooks, because both name a session the same way: by its
+# working directory. An Orca worktree IS a working directory, so a worktree's
+# status lands on the key that worktree already owns -- no second mapping, no
+# double-claimed keys when a Claude session runs inside Orca.
+#
+# What this buys: Orca installs its own status hooks into fifteen agent CLIs,
+# so one bridge lights the amber for Codex, Gemini, Cursor, Amp, Droid and the
+# rest -- agents that have no Claude Code hooks to give us. And it flows back:
+# a key press activates that worktree inside Orca, and the check/cross keys
+# answer the exact pane that is asking instead of keystroking whatever window
+# happens to be focused.
+_orca_lock = threading.Lock()
+_orca = {"client": None,      # orca_client.Orca while the app is up
+         "seen": {},          # cwd -> pad state this bridge last applied
+         "act": {},           # cwd -> last tool-activity token (shimmers)
+         "meta": {},          # cwd -> {id, name, pane, agent, blocked_at}
+         "last_focus": None,  # cwd of the last Orca key press
+         "running": False,    # Orca app up (runtime metadata present)?
+         "reachable": False,  # ...and answering
+         "worktrees": 0,
+         "error": ""}
+
+
+def orca_owns(cwd):
+    """Is this session an Orca worktree we can act on?"""
+    with _orca_lock:
+        return bool(cwd) and cwd in _orca["meta"] and _orca["client"] is not None
+
+
+def _orca_target():
+    """(client, cwd, info) for the Orca session a pad answer should go to.
+
+    The last Orca key you pressed wins while it is still asking -- that is the
+    amber you were looking at. Otherwise the agent that asked most recently.
+    """
+    with _orca_lock:
+        client = _orca["client"]
+        meta = dict(_orca["meta"])
+        last = _orca["last_focus"]
+    if client is None:
+        return None, None, None
+    info = meta.get(last) if last else None
+    if info and info.get("pane"):
+        return client, last, info
+    asking = [(info.get("blocked_at") or 0, cwd, info)
+              for cwd, info in meta.items() if info.get("pane")]
+    if not asking:
+        return None, None, None
+    _, cwd, info = max(asking, key=lambda row: row[0])
+    return client, cwd, info
+
+
+def orca_focus(cwd):
+    """Take me there: activate that worktree in Orca and raise its agent pane.
+
+    Runs on its own thread -- the runtime answers in milliseconds, but a busy
+    app must never stall the HID reader.
+    """
+    with _orca_lock:
+        client, info = _orca["client"], _orca["meta"].get(cwd)
+        _orca["last_focus"] = cwd
+    if client is None or not info:
+        return False
+    try:
+        client.activate(info["id"])
+        pane = info.get("pane") or info.get("lead_pane")
+        if pane:
+            handle = client.pane_handle(pane, info["id"])
+            if handle:
+                client.focus_terminal(handle)
+        print(f"  orca    activated {info.get('name') or cwd}", flush=True)
+        return True
+    except orca_client.OrcaError as exc:
+        print(f"  orca    focus failed: {exc}", flush=True)
+        return False
+
+
+def orca_answer(approve):
+    """Answer the asking agent inside Orca: Enter to approve, Esc to decline.
+
+    Returns False when there is nothing to answer, and the caller falls back
+    to the panel's keystroke path.
+    """
+    client, cwd, info = _orca_target()
+    if client is None:
+        return False
+    try:
+        handle = client.pane_handle(info["pane"], info["id"])
+        if not handle:
+            return False
+        if approve:
+            client.send(handle, "", enter=True)
+        else:
+            client.send(handle, "\x1b")
+        print(f"  orca    {'approved' if approve else 'declined'} "
+              f"{info.get('agent') or 'agent'} in "
+              f"{info.get('name') or cwd}", flush=True)
+        return True
+    except orca_client.OrcaError as exc:
+        print(f"  orca    answer failed: {exc}", flush=True)
+        return False
+
+
+def orca_status():
+    """What the panel and `codexpad.check` show for the Orca link."""
+    with _orca_lock:
+        asking = sum(1 for info in _orca["meta"].values() if info.get("pane"))
+        return {"enabled": ORCA_ENABLED[0], "running": _orca["running"],
+                "reachable": _orca["reachable"],
+                "worktrees": _orca["worktrees"], "asking": asking,
+                "keys": len(_orca["seen"]), "error": _orca["error"]}
+
+
+def focus_session(cwd, state):
+    """Route a 'take me there' press. Never blocks the HID reader.
+
+    An Orca worktree is activated inside Orca itself -- exact worktree, exact
+    pane -- and the panel is still told, so it can raise the Orca window in
+    the login session (the one thing a root daemon cannot do). Everything
+    else keeps the original behaviour: the panel finds the session's app.
+    """
+    if orca_owns(cwd):
+        threading.Thread(target=orca_focus, args=(cwd,), daemon=True).start()
+        emit_event({"t": "FOCUS", "cwd": cwd, "state": state, "app": "Orca"})
+    else:
+        emit_event({"t": "FOCUS", "cwd": cwd, "state": state})
+
+
+def answer_from_pad(approve):
+    """✓ / ✗ press: answer inside Orca if we can, keystrokes if we can't."""
+    def run():
+        if not orca_answer(approve):
+            emit_event({"t": "APPROVE" if approve else "DECLINE"})
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _orca_forget(reason=""):
+    with _orca_lock:
+        _orca["client"] = None
+        _orca["meta"].clear()
+        _orca["reachable"] = False
+        _orca["worktrees"] = 0
+        _orca["error"] = reason
+
+
+def _orca_release_keys(handle):
+    """Give back every key the bridge claimed.
+
+    Called when Orca quits or the bridge is switched off: those agents went
+    with the app, and a key left amber for an agent that no longer exists is
+    worse than a dark one. Claude sessions of its own keep their keys -- the
+    hooks reclaim them on the next event either way.
+    """
+    with _orca_lock:
+        claimed = list(_orca["seen"])
+        _orca["seen"].clear()
+        _orca["act"].clear()
+    for cwd in claimed:
+        with _lock:
+            owned = cwd in _slots
+        if owned:
+            handle_request(handle, {"state": "end", "cwd": cwd})
+
+
+def _orca_apply(handle, result):
+    """Paint one worktree.ps answer onto the pad. Edge-triggered.
+
+    Only transitions are written, so the bridge never fights the Claude Code
+    hooks over a session both can see: hooks describe the same worktree in
+    finer grain, and whichever saw the change last is the one that paints.
+    The single exception is the plain 'idle' -- see below.
+    """
+    rows = {}
+    meta = {}
+    now = time.time()
+    for summary in (result.get("worktrees") or []):
+        if not isinstance(summary, dict):
+            continue
+        cwd = summary.get("path")
+        if not cwd:
+            continue
+        rows[cwd] = summary
+        pane, agent = orca_client.blocked_pane(summary)
+        with _orca_lock:
+            was = _orca["meta"].get(cwd) or {}
+        lead = (summary.get("agents") or [{}])[0] or {}
+        meta[cwd] = {
+            "id": summary.get("worktreeId"),
+            "name": summary.get("displayName"),
+            "pane": pane,
+            "lead_pane": lead.get("paneKey") if isinstance(lead, dict) else None,
+            "agent": agent,
+            # first moment this worktree started asking, so the check key can
+            # answer the most recent question rather than the oldest one
+            "blocked_at": (was.get("blocked_at") or now) if pane else 0,
+        }
+    with _orca_lock:
+        _orca["meta"] = meta
+        _orca["worktrees"] = len(rows)
+        seen, act = _orca["seen"], _orca["act"]
+
+    for cwd in list(seen):
+        if cwd not in rows or orca_client.pad_state(rows[cwd]) is None:
+            seen.pop(cwd, None)
+            act.pop(cwd, None)
+            with _lock:
+                owned = cwd in _slots
+            if owned:
+                handle_request(handle, {"state": "end", "cwd": cwd})
+
+    for cwd, summary in rows.items():
+        state = orca_client.pad_state(summary)
+        if state is None:
+            continue
+        if state != seen.get(cwd):
+            with _lock:
+                slot = _slots.get(cwd)
+                current = _slot_state.get(slot) if slot is not None else None
+            seen[cwd] = state
+            # a finished key stays finished: Orca's 'active' only means no
+            # agent is running, which is exactly what green already says.
+            if state == "idle" and current in ("done", "error"):
+                continue
+            handle_request(handle, {"state": state, "cwd": cwd})
+        elif state == "working":
+            # tool activity on any agent shimmers the key, the same signal
+            # Claude's PreToolUse hook gives -- for every agent in the fleet
+            token = orca_client.activity_token(summary)
+            if token != act.get(cwd):
+                act[cwd] = token
+                with _lock:
+                    slot = _slots.get(cwd)
+                if slot is not None and not _paused[0]:
+                    pulse(handle, slot)
+
+
+def orca_bridge(handle):
+    """Follow the Orca fleet for as long as the daemon lives.
+
+    Costs nothing when Orca isn't installed: with no runtime metadata file
+    this is one stat() per poll. When Orca is up, worktree.ps is asked with
+    the previous snapshot cursor, so an unchanged fleet answers "unchanged"
+    without sending the catalogue.
+    """
+    snapshot = None
+    announced = False
+    while True:
+        time.sleep(max(0.5, ORCA_POLL[0]))
+        if not ORCA_ENABLED[0]:
+            if _orca["client"] is not None or _orca["seen"]:
+                print("  orca    bridge switched off", flush=True)
+                _orca_forget("disabled in config")
+                _orca_release_keys(handle)
+                _orca["running"] = False
+                snapshot, announced = None, False
+            continue
+        try:
+            metadata = orca_client.read_metadata()
+            if not metadata:
+                if _orca["running"] or _orca["seen"]:
+                    print("  orca    runtime gone (app quit?) — releasing its "
+                          "keys", flush=True)
+                    _orca_forget("Orca isn't running")
+                    _orca_release_keys(handle)
+                _orca["running"] = False
+                _orca["error"] = "Orca isn't running"
+                snapshot, announced = None, False
+                continue
+            _orca["running"] = True
+            with _orca_lock:
+                client = _orca["client"]
+            if client is None or client.endpoint != metadata["endpoint"]:
+                client = orca_client.Orca(metadata)
+                with _orca_lock:
+                    _orca["client"] = client
+                    _orca["seen"].clear()
+                snapshot, announced = None, False
+
+            result = client.ps(snapshot) or {}
+            _orca["reachable"] = True
+            _orca["error"] = ""
+            if not announced:
+                announced = True
+                print(f"  orca    following the fleet at {client.endpoint}",
+                      flush=True)
+            snapshot = result.get("snapshotId") or snapshot
+            if result.get("unchanged"):
+                continue
+            _orca_apply(handle, result)
+        except orca_client.OrcaError as exc:
+            if announced:
+                print(f"  orca    lost the runtime: {exc}", flush=True)
+            _orca_forget(exc.message)
+            snapshot, announced = None, False
+        except Exception as exc:            # never take the daemon down
+            print(f"  orca    bridge error: {exc}", flush=True)
+            time.sleep(2)
+
+
 def _mic_set(handle, is_open, how):
     if _mic["open"] == is_open:
         return
@@ -512,13 +817,13 @@ def dispatch(handle, msg):
             set_slot(handle, slot, "idle" if cwd else "off")
         elif state in ("working", "blocked") and cwd:
             # take me there: the panel focuses this session's window
-            emit_event({"t": "FOCUS", "cwd": cwd, "state": state})
+            focus_session(cwd, state)
     elif key == "ACT07" and APPROVE_FROM_PAD[0]:
-        print("  press   ACT07 (approve -> Enter)", flush=True)
-        emit_event({"t": "APPROVE"})
+        print("  press   ACT07 (approve)", flush=True)
+        answer_from_pad(True)
     elif key == "ACT08" and APPROVE_FROM_PAD[0]:
-        print("  press   ACT08 (decline -> Esc)", flush=True)
-        emit_event({"t": "DECLINE"})
+        print("  press   ACT08 (decline)", flush=True)
+        answer_from_pad(False)
     elif key == "ACT12" and key not in COMMANDS:
         # the Codex key does the obvious: hand the pad to Codex. Marked auto
         # so it self-heals — the watcher takes the pad back when ChatGPT
@@ -794,6 +1099,7 @@ def handle_request(handle, req):
                                    else {"connected": True, "seen": True,
                                          "error": ""}),
                         "stats": dict(_stats),
+                        "orca": orca_status(),
                         "mic": {"open": _mic["open"], "latched": _mic["latched"]},
                         "slots": [{"slot": i,
                                    "state": _slot_state.get(i) or "off",
@@ -1005,10 +1311,15 @@ def serve(handle):
     handle.set_nonblocking(True)
     threading.Thread(target=reader, args=(handle,), daemon=True).start()
     threading.Thread(target=nagger, args=(handle,), daemon=True).start()
+    threading.Thread(target=orca_bridge, args=(handle,), daemon=True).start()
     if isinstance(handle, Device):
         threading.Thread(target=handle.watch, daemon=True).start()
     print(f"codexpad ready on {SOCK_PATH} "
           f"({NSLOTS} agent keys, config {config.CONFIG_PATH})", flush=True)
+    if ORCA_ENABLED[0]:
+        print(f"  orca    watching for an Orca fleet "
+              f"({orca_client.metadata_path() or 'no userData path'})",
+              flush=True)
     if isinstance(handle, Device) and handle.lost:
         print("  (socket is live before the pad is: the panel can already "
               "see status and say what's wrong)", flush=True)

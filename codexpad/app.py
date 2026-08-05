@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__ as VERSION
 from . import config
+from . import orca
 
 HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Notification",
                "Stop", "StopFailure", "SessionEnd", "PreToolUse"]
@@ -269,8 +270,8 @@ def codex_watcher():
 
 # Focus targets, most specific first: the running one gets `open -a`'d,
 # which raises an app without needing any AppleEvents/Accessibility grant.
-FOCUS_APPS = [("Claude.app", "Claude"), ("Cursor.app", "Cursor"),
-              ("iTerm.app", "iTerm"),
+FOCUS_APPS = [("Orca.app", "Orca"), ("Claude.app", "Claude"),
+              ("Cursor.app", "Cursor"), ("iTerm.app", "iTerm"),
               ("Visual Studio Code.app", "Visual Studio Code"),
               ("Terminal.app", "Terminal")]
 
@@ -281,14 +282,23 @@ def _run(cmd, **extra_env):
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def focus_session(cwd, cfg):
-    """Bring the session that needs you to the front (amber-key press)."""
+def focus_session(cwd, cfg, app_hint=None):
+    """Bring the session that needs you to the front (amber-key press).
+
+    app_hint comes from the daemon when it already knows which app owns the
+    session — an Orca worktree, say, which the daemon has just activated
+    inside Orca over its runtime socket. All that's left for this side is to
+    raise the window, which only the login session can do.
+    """
     custom = (cfg.get("focus_command") or "").strip()
     if custom:
         _run(custom, CODEXPAD_CWD=cwd or "")
         return "focus_command"
     if sys.platform != "darwin":
         return None
+    if app_hint:
+        _run(f"open -a '{app_hint}'")
+        return app_hint
     for marker, app in FOCUS_APPS:
         if subprocess.run(["pgrep", "-f", marker],
                           capture_output=True).returncode == 0:
@@ -308,7 +318,7 @@ def handle_panel_event(ev, cfg):
         return
     t = ev.get("t") if isinstance(ev, dict) else None
     if t == "FOCUS":
-        target = focus_session(ev.get("cwd"), cfg)
+        target = focus_session(ev.get("cwd"), cfg, ev.get("app"))
         print(f"focus: {ev.get('cwd')} -> {target or 'no target found'}",
               flush=True)
     elif t == "APPROVE":
@@ -533,6 +543,7 @@ it needs you, green when it's done.</p>
   </div>
   <div id="toast">loading…</div>
   <div id="today" class="hint" style="margin-top:.4rem"></div>
+  <div id="orcastat" class="hint" style="margin-top:.2rem"></div>
 </div>
 
 <div class="card">
@@ -567,8 +578,9 @@ it needs you, green when it's done.</p>
     <input type="text" id="micoff" placeholder="command run when the mic closes"></label>
   <h2 style="margin-top:1.6rem">Pad → Claude</h2>
   <p class="hint">Press a <b>working or amber key</b> and this app brings that
-  session's window forward (auto-detects Claude / Cursor / iTerm / VS Code /
-  Terminal — or set your own command, run with <code>CODEXPAD_CWD</code>):</p>
+  session's window forward (auto-detects Orca / Claude / Cursor / iTerm /
+  VS Code / Terminal — or set your own command, run with
+  <code>CODEXPAD_CWD</code>):</p>
   <label class="hint">focus command (blank = auto)
     <input type="text" id="focuscmd" placeholder="auto — raises the first running app it knows"></label>
   <label class="hint" style="display:block;margin-top:.6rem">
@@ -580,6 +592,20 @@ it needs you, green when it's done.</p>
     ring nags after <input type="number" id="nagmin" min="0" max="120"
       style="width:4.5rem"> minutes blocked (0 = off)
   </label>
+  <h2 style="margin-top:1.6rem">Orca fleet</h2>
+  <p class="hint"><a href="https://www.onorca.dev" target="_blank">Orca</a> runs
+  a fleet of agents — Claude, Codex, Gemini, Cursor, Copilot and more — one per
+  git worktree. A worktree <i>is</i> a working directory, so it claims a key
+  exactly like a Claude session does: <b>amber still means an agent is waiting
+  on you</b>, whichever agent it is. Press its key and the pad activates that
+  worktree inside Orca; with ✓/✗ enabled above, they answer <b>that agent's own
+  pane</b> instead of keystroking the focused window — no Accessibility grant
+  in that path at all.</p>
+  <label class="hint" style="display:block;margin-top:.6rem">
+    <input type="checkbox" id="orca">
+    follow Orca worktrees while the Orca app is running
+  </label>
+  <p class="hint" id="orcahint" style="margin-top:.4rem"></p>
   <p class="hint" style="margin-top:1rem">Shell commands by control — AG00–AG05,
   ACT06–ACT09, ACT12, ENC_CW/ENC_CC/ENC_CLK, STICK_N/E/S/W, MIC_ON/MIC_OFF
   (these run from the daemon, dropped to your user). Saved with the button above.</p>
@@ -721,6 +747,8 @@ async function save() {
                  focus_command: $("#focuscmd").value.trim(),
                  approve_from_pad: $("#approve").checked,
                  nag_minutes: Math.max(0, +$("#nagmin").value || 0),
+                 orca: $("#orca").checked,
+                 orca_poll_s: cfg.orca_poll_s,
                  port: cfg.port };
   const r = await api("/api/config", body);
   say(r.error ? "saved, but: " + r.error : "saved — daemon reloaded ✓");
@@ -781,6 +809,17 @@ function paintPad(status) {
     if (t.blocked_s >= 30) parts.push(`${mins(Math.max(t.blocked_s, 60))}m of Claude waiting on you`);
     $("#today").textContent = parts.length
       ? "since daemon start: " + parts.join(" · ") : "";
+  }
+  const o = status.orca;
+  if (o) {
+    let line = "";
+    if (!o.enabled) line = "";
+    else if (!o.running) line = "🐋 Orca: not running — start Orca and its worktrees light up here";
+    else if (!o.reachable) line = "🐋 Orca: running but unreachable" + (o.error ? " — " + o.error : "");
+    else line = `🐋 Orca: ${o.worktrees} worktree${o.worktrees === 1 ? "" : "s"}` +
+                ` · ${o.keys} on the pad` +
+                (o.asking ? ` · ${o.asking} waiting on you` : "");
+    $("#orcastat").textContent = line;
   }
 }
 function hw(cls, msg) {
@@ -942,6 +981,9 @@ $("#trim").onchange = async () => {
   $("#approve").checked = !!cfg.approve_from_pad;
   $("#approve").onchange = () => { save(); };
   $("#nagmin").value = cfg.nag_minutes === undefined ? 10 : cfg.nag_minutes;
+  $("#orca").checked = cfg.orca !== false;
+  $("#orca").onchange = () => { save(); };
+  $("#orcahint").textContent = "runtime file: " + (cfg.orca_metadata || "—");
   $("#commands").value = JSON.stringify(cfg.commands, null, 2);
   $("#cfgpath").textContent = cfg.config_path || "~/.codexpad.json";
   $("#presets").innerHTML = Object.keys(PRESETS)
@@ -976,6 +1018,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/config":
             cfg = config.load()
             cfg["config_path"] = config.CONFIG_PATH
+            cfg["orca_metadata"] = orca.metadata_path()
             self._send(cfg)
         elif self.path == "/api/doctor":
             self._send(doctor())

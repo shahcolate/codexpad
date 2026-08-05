@@ -72,6 +72,16 @@ DEFAULTS = {
     # A session blocked longer than this lights the ambient ring amber as a
     # louder nag. 0 disables.
     "nag_minutes": 10,
+    # Follow an Orca fleet (https://www.onorca.dev): while the Orca app is
+    # running, every worktree with a live agent -- Claude, Codex, Gemini,
+    # Cursor, whatever -- claims a key and lights with its status, and
+    # pressing that key acts on the worktree inside Orca. Costs nothing when
+    # Orca isn't installed: the bridge only wakes when Orca's runtime file
+    # appears. See codexpad/orca.py.
+    "orca": True,
+    # How often to ask Orca what changed. Orca answers "unchanged" cheaply
+    # (a snapshot cursor), so this is a light poll, not a scrape.
+    "orca_poll_s": 1.5,
     "port": PORT,
 }
 
@@ -99,9 +109,12 @@ def load():
     for key in ("mic_on_command", "mic_off_command", "focus_command"):
         if isinstance(user.get(key), str):
             cfg[key] = user[key]
-    for key in ("auto_handoff", "approve_from_pad"):
+    for key in ("auto_handoff", "approve_from_pad", "orca"):
         if isinstance(user.get(key), bool):
             cfg[key] = user[key]
+    if isinstance(user.get("orca_poll_s"), (int, float)) \
+            and not isinstance(user.get("orca_poll_s"), bool):
+        cfg["orca_poll_s"] = min(30.0, max(0.5, float(user["orca_poll_s"])))
     if isinstance(user.get("nag_minutes"), (int, float)) \
             and not isinstance(user.get("nag_minutes"), bool):
         cfg["nag_minutes"] = max(0, user["nag_minutes"])
@@ -116,7 +129,7 @@ def save(user_cfg):
             for key in ("states", "commands", "mic_color",
                         "mic_on_command", "mic_off_command",
                         "auto_handoff", "focus_command", "approve_from_pad",
-                        "nag_minutes", "port")
+                        "nag_minutes", "orca", "orca_poll_s", "port")
             if key in user_cfg}
     with open(CONFIG_PATH, "w") as fh:
         json.dump(keep, fh, indent=2)

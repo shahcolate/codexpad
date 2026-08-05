@@ -16,6 +16,7 @@ import time
 
 from . import __version__ as VERSION
 from . import config
+from . import orca
 
 GREEN, RED, DIM, END = "\033[32m", "\033[31m", "\033[2m", "\033[0m"
 
@@ -101,6 +102,32 @@ def main():
         f"Claude Code hooks installed ({len(have)}/{len(events)})",
         hooks_path)
     hooks_ok = len(have) == len(events)
+
+    # 3b. Orca, if the user runs one. Never fatal: the pad works fine
+    # without it, so this reports and moves on.
+    orca_stat = st.get("orca") or {}
+    if orca_stat.get("enabled", True):
+        info = orca.probe()
+        installed = bool(info["metadata"]) and \
+            os.path.isdir(os.path.dirname(info["metadata"]))
+        if not info["running"]:
+            # not an Orca user, or Orca is simply closed — neither is a fault
+            if installed:
+                print(f"  {DIM}····  Orca is installed but not running — its "
+                      f"worktrees will light the pad when you open it{END}")
+        elif not info["reachable"]:
+            say(False, "Orca fleet visible (optional)", info["error"])
+            print("\n→ Orca wrote its runtime file but won't answer. Restart "
+                  "the Orca app;\n  codexpad keeps running on Claude Code "
+                  "hooks meanwhile.")
+        else:
+            say(True, "Orca fleet visible (optional)",
+                f"{info['worktrees']} worktrees, {info['agents']} agents, "
+                f"{len(info['active'])} would light")
+            if orca_stat.get("running") and not orca_stat.get("reachable"):
+                print("  (this process can see Orca but the daemon can't — "
+                      "a root daemon\n   reads the runtime file from "
+                      "$SUDO_USER's home; check ORCA_USER_DATA_PATH)")
 
     # 4. fire a real light: if this works, codexpad itself is HEALTHY
     print("\n  WATCH THE PAD: a key should go blue-breathing now, "
