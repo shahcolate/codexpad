@@ -683,6 +683,8 @@ def orca_bridge(handle):
     """
     snapshot = None
     announced = False
+    unreachable = 0
+    endpoint = None               # the runtime we last painted from
     while True:
         time.sleep(max(0.5, ORCA_POLL[0]))
         if not ORCA_ENABLED[0]:
@@ -691,7 +693,7 @@ def orca_bridge(handle):
                 _orca_forget("disabled in config")
                 _orca_release_keys(handle)
                 _orca["running"] = False
-                snapshot, announced = None, False
+                snapshot, announced, endpoint = None, False, None
             continue
         try:
             metadata = orca_client.read_metadata()
@@ -703,21 +705,31 @@ def orca_bridge(handle):
                     _orca_release_keys(handle)
                 _orca["running"] = False
                 _orca["error"] = "Orca isn't running"
-                snapshot, announced = None, False
+                snapshot, announced, endpoint = None, False, None
                 continue
             _orca["running"] = True
             with _orca_lock:
                 client = _orca["client"]
             if client is None or client.endpoint != metadata["endpoint"]:
+                if endpoint and endpoint != metadata["endpoint"]:
+                    # a different Orca instance (every launch gets its own
+                    # socket): nothing we painted for the old one is
+                    # guaranteed to exist in this one, so start from dark
+                    # and let the first answer repaint.
+                    _orca_release_keys(handle)
+                # NOT cleared when the endpoint is unchanged: a retry after a
+                # blip must keep what we painted, or the release-on-crash
+                # path below would find nothing left to release.
+                endpoint = metadata["endpoint"]
                 client = orca_client.Orca(metadata)
                 with _orca_lock:
                     _orca["client"] = client
-                    _orca["seen"].clear()
                 snapshot, announced = None, False
 
             result = client.ps(snapshot) or {}
             _orca["reachable"] = True
             _orca["error"] = ""
+            unreachable = 0
             if not announced:
                 announced = True
                 print(f"  orca    following the fleet at {client.endpoint}",
@@ -730,6 +742,15 @@ def orca_bridge(handle):
             if announced:
                 print(f"  orca    lost the runtime: {exc}", flush=True)
             _orca_forget(exc.message)
+            unreachable += 1
+            # A clean quit deletes the runtime file and the branch above
+            # releases the keys. A crash or a force-quit leaves it behind, so
+            # "the file is there and nothing answers" is the only signal those
+            # agents are gone -- and a key left amber for an agent that no
+            # longer exists is the worst thing the pad can say. Two strikes,
+            # so one blip mid-restart doesn't dump live keys.
+            if exc.code == "runtime_unavailable" and unreachable >= 2:
+                _orca_release_keys(handle)
             snapshot, announced = None, False
         except Exception as exc:            # never take the daemon down
             print(f"  orca    bridge error: {exc}", flush=True)
